@@ -28,11 +28,11 @@ An Acrobat add-on for preparing accounting work papers.
 4. Install:
    - **Windows:** double-click `Install.cmd`.
    - **Mac:** right-click `install.command` → **Open**.
-5. Open Acrobat. Everything is under **Edit → Reference Tool**.
+5. Open Acrobat. Everything is under **Menu → Reference Tool**: the Menu button at the top left. In classic Acrobat it's **Edit → Reference Tool**.
 
-The Windows installer doesn't need admin rights. It:
+The Windows installer:
 
-- copies the add-on into every Acrobat version it finds (DC, 2020, …),
+- copies the add-on into Acrobat's program folder (`C:\Program Files\Adobe\Acrobat DC\Acrobat\Javascripts`). Current Acrobat versions only load add-ons from there, so **Windows asks once for permission: click Yes**,
 - installs an updater and an uninstaller,
 - adds **Start menu → Reference Tool** shortcuts.
 
@@ -40,18 +40,18 @@ The Windows installer doesn't need admin rights. It:
 
 - Classic interface: *View → Tools → Add-on Tools*.
 - New interface: *All tools*.
-- If you can't find them, the *Edit* menu always has every command.
+- If you can't find them, *Menu → Reference Tool* always has every command.
 
 If the menu doesn't show up, go to *Preferences → JavaScript* and tick *Enable Acrobat JavaScript*.
 
 **Manual install:** copy `ReferenceTool.js` from the release into your Acrobat JavaScripts folder:
 
-- Windows: `%APPDATA%\Adobe\Acrobat\DC\JavaScripts\`
+- Windows: `C:\Program Files\Adobe\Acrobat DC\Acrobat\Javascripts\` (needs admin). To find the exact folder, open the JavaScript console with Ctrl+J and run `app.getPath("app","javascript")`.
 - Mac: `~/Library/Application Support/Adobe/Acrobat/DC/JavaScripts/`
 
 ## Updating
 
-- **In Acrobat:** *Edit → Reference Tool → Check for Updates*. Acrobat also checks quietly about once a week after it starts, and pops up only when there's a new version. To turn the automatic check off, set `autoUpdateCheck: false` in the settings. Acrobat may ask once whether it may connect to `api.github.com`; allow it.
+- **In Acrobat:** *Menu → Reference Tool → Check for Updates*. Acrobat also checks quietly about once a week after it starts, and pops up only when there's a new version. To turn the automatic check off, set `autoUpdateCheck: false` in the settings. Acrobat may ask once whether it may connect to `api.github.com`; allow it.
 - **Windows:** close Acrobat and run *Start menu → Reference Tool → Update Reference Tool*. It:
   1. shows what's new,
   2. downloads the release,
@@ -164,7 +164,7 @@ Use this when a page needs a newer version, for example a reissued statement or 
 2. Choose the new PDF and which of its pages to use.
 3. Choose whether to carry over other comments on the page, such as reviewer notes.
 
-The tags and tapes go back in the same positions. If the figures on the new page sit somewhere else, use **Edit → Reference Tool → Move Tag**.
+The tags and tapes go back in the same positions. If the figures on the new page sit somewhere else, use **Menu → Reference Tool → Move Tag**.
 
 ### Repair Tags
 
@@ -207,7 +207,7 @@ The mock can't show how Acrobat itself behaves, so a manual check in Acrobat Pro
 
 **Manual test checklist (first run in Acrobat)**
 
-- [ ] The *Edit → Reference Tool* menu and the toolbar buttons appear.
+- [ ] The *Menu → Reference Tool* menu and the toolbar buttons appear.
 - [ ] Place Tag: the tag lands where you click.
   - If the height is off, set `mouseYFromTop: true`.
 - [ ] Clicking a tag jumps to its match, and back again.

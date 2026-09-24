@@ -25,9 +25,30 @@ if (Test-Path -LiteralPath $acroRoot) {
     Get-ChildItem -LiteralPath $acroRoot -Directory | ForEach-Object { $targets += (Join-Path $_.FullName 'JavaScripts') }
 }
 
+function Invoke-Elevated([string]$command) {
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    try {
+        $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -WindowStyle Hidden `
+            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $enc)
+        return ($p.ExitCode -eq 0)
+    } catch { return $false }
+}
+function Quote([string]$s) { return "'" + ($s -replace "'", "''") + "'" }
+
+$needAdmin = @()
 foreach ($t in ($targets | Select-Object -Unique)) {
     $f = Join-Path $t 'ReferenceTool.js'
-    if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force; Say "  Removed $f" }
+    if (Test-Path -LiteralPath $f) {
+        try { Remove-Item -LiteralPath $f -Force; Say "  Removed $f" } catch { $needAdmin += $f }
+    }
+}
+if ($needAdmin.Count -gt 0) {
+    Say "  Windows will ask for permission to remove the add-on from Acrobat's program folder..."
+    $cmd = ($needAdmin | ForEach-Object { "Remove-Item -LiteralPath $(Quote $_) -Force" }) -join '; '
+    [void](Invoke-Elevated $cmd)
+    foreach ($f in $needAdmin) {
+        if (Test-Path -LiteralPath $f) { Say "  Could not remove $f (permission declined)" } else { Say "  Removed $f" }
+    }
 }
 
 $startDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Reference Tool'

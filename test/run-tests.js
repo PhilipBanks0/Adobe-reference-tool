@@ -13,8 +13,9 @@ const vm = require("vm");
 const assert = require("assert");
 
 // ---------------------------------------------------------------- mocks
-function makeEnv() {
-  const env = { httpRequests: [], launched: [], alerts: [], alertAnswers: [], responses: [], dialogs: [], dialogResults: [], timers: [] };
+function makeEnvWith(menuParents) { return makeEnv(menuParents); }
+function makeEnv(menuParents) {
+  const env = { menuParents: menuParents || null, httpRequests: [], launched: [], alerts: [], alertAnswers: [], responses: [], dialogs: [], dialogResults: [], timers: [] };
 
   class Annot {
     constructor(doc, props) { this._doc = doc; Object.assign(this, props); if (!this.name) this.name = "auto" + Math.random(); this.rect = props.rect.slice(); }
@@ -94,7 +95,11 @@ function makeEnv() {
     launchURL(u) { env.launched.push(u); },
     setTimeOut(expr) { env.timers.push(expr); return { id: 1 }; },
     clearTimeOut() {},
-    addSubMenu() {}, addMenuItem() {}, addToolButton(o) { (env.buttons = env.buttons || []).push(o.cLabel); }
+    addSubMenu(o) {
+      if (env.menuParents && env.menuParents.indexOf(o.cParent) < 0) throw new TypeError("Invalid argument type.");
+      (env.submenus = env.submenus || []).push(o.cParent);
+    },
+    addMenuItem(o) { (env.menuItems = env.menuItems || []).push(o.cUser); }, addToolButton(o) { (env.buttons = env.buttons || []).push(o.cLabel); }
   };
   function runTimers() { while (env.timers.length) vm.runInContext(env.timers.shift(), ctx); }
 
@@ -132,6 +137,15 @@ console.log("Reference Tool tests");
 test("toolbar buttons install", () => {
   const env = makeEnv();
   assert.deepStrictEqual(env.buttons, ["Place Tag", "Calc Tape", "Tag Check", "Replace Page", "Repair Tags"]);
+});
+
+test("menu goes under the new Acrobat 'Menu', falling back to Edit on classic Acrobat", () => {
+  let env = makeEnv();
+  assert.strictEqual(env.ART.menuParent, "AV2::HamburgerMenu");
+  assert.ok(env.menuItems.indexOf("Place Tag") >= 0 && env.menuItems.indexOf("Check for Updates") >= 0);
+  // classic UI: no hamburger menu
+  env = (function () { const e = makeEnvWith(["Edit", "Tools", "Help"]); return e; })();
+  assert.strictEqual(env.ART.menuParent, "Edit");
 });
 
 test("amount parsing", () => {

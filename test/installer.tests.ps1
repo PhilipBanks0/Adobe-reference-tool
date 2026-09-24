@@ -119,6 +119,34 @@ try {
     Check "uninstall exits 0" ($r.code -eq 0) $r.out
     Check "uninstall removes add-on" (-not (Test-Path $dcJs) -and -not (Test-Path (Join-Path $acro '2020/JavaScripts/ReferenceTool.js')))
     Check "uninstall removes updater" (-not (Test-Path $appDir))
+
+    # ---- program-folder install (what current Acrobat needs) --------------
+    $appJs = Join-Path $tmp 'Program Files/Adobe/Acrobat DC/Acrobat/Javascripts'
+    New-Item -ItemType Directory -Force -Path $appJs | Out-Null
+    $env:REFTOOL_ACROBAT_APP_DIRS = $appJs
+    # leftover per-user copy from an older version
+    New-Item -ItemType Directory -Force -Path (Join-Path $acro 'DC/JavaScripts') | Out-Null
+    Copy-Item -LiteralPath (Join-Path $pkgCur.stage 'ReferenceTool.js') -Destination $dcJs -Force
+    $r = Run (Join-Path $pkgCur.stage 'install.ps1') @('-Quiet', '-NoShortcuts')
+    Check "installs into Acrobat program folder" ((JsVersion (Join-Path $appJs 'ReferenceTool.js')) -eq $current) $r.out
+    Check "removes old per-user copy (no double load)" (-not (Test-Path $dcJs))
+    $info = Get-Content (Join-Path $appDir 'installed.json') -Raw | ConvertFrom-Json
+    Check "records program-folder target" (@($info.targets) -contains $appJs)
+    $r = Run (Join-Path $appDir 'update.ps1') (@('-Yes') + $common)
+    Check "update replaces program-folder copy" ((JsVersion (Join-Path $appJs 'ReferenceTool.js')) -eq $new) $r.out
+    Check "update doesn't recreate per-user copy" (-not (Test-Path $dcJs))
+    $r = Run (Join-Path $appDir 'uninstall.ps1') @('-Quiet')
+    Check "uninstall removes program-folder copy" (-not (Test-Path (Join-Path $appJs 'ReferenceTool.js'))) $r.out
+
+    # ---- permission declined: falls back to the per-user folder -----------
+    if (-not ($IsWindows -or $PSVersionTable.PSEdition -eq 'Desktop') -and ((& id -u) -ne '0')) {
+        & chmod 555 $appJs
+        $r = Run (Join-Path $pkgCur.stage 'install.ps1') @('-NoShortcuts')
+        & chmod 755 $appJs
+        Check "declined permission falls back to per-user folder" ((JsVersion $dcJs) -eq $current) $r.out
+        Check "explains why and what to do" ($r.out -match "program folder" -and $r.out -match "Run Install.cmd again")
+    }
+    Remove-Item Env:\REFTOOL_ACROBAT_APP_DIRS
 }
 finally {
     if ($server) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }

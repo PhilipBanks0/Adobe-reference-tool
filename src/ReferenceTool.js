@@ -69,7 +69,7 @@ var ART_privLaunchURL = app.trustedFunction(function (url) {
 var ART_timer = null;
 
 var ARTool = (function () {
-    var VERSION = "0.2.0";
+    var VERSION = "0.2.1";
     var REPO = "PhilipBanks0/Adobe-reference-tool";
     var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
     var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -1117,6 +1117,7 @@ var ARTool = (function () {
             cTitle: "Reference Tool",
             nIcon: 3,
             cMsg: "Workpaper Reference Tool " + VERSION + "\n" + RELEASES_URL + "\n\n" +
+                "Find these commands under Menu > Reference Tool (new Acrobat) or Edit > Reference Tool (classic).\n\n" +
                 "Place Tag: click Place Tag, click the figure; go to the support, click Place Tag, click the matching figure.\n" +
                 "Calc Tape: enter the calculation, then click where the tape goes.\n" +
                 "Tag Check: list all tags and flag unmatched or broken ones.\n" +
@@ -1193,9 +1194,16 @@ var ARTool = (function () {
         installUI: function () {
             var i;
             var c;
-            try {
-                app.addSubMenu({ cName: "ARTMenu", cUser: "Reference Tool", cParent: "Edit" });
-            } catch (e) {}
+            // New Acrobat interface: the hamburger "Menu" (top left).
+            // Classic interface: the Edit menu. Use the first that exists.
+            var parents = ["AV2::HamburgerMenu", "Edit", "Tools", "Help"];
+            api.menuParent = null;
+            for (i = 0; i < parents.length && !api.menuParent; i++) {
+                try {
+                    app.addSubMenu({ cName: "ARTMenu", cUser: "Reference Tool", cParent: parents[i] });
+                    api.menuParent = parents[i];
+                } catch (e) {}
+            }
             for (i = 0; i < COMMANDS.length; i++) {
                 c = COMMANDS[i];
                 var exec = "ARTool.run('" + c.id + "', event.target);";
