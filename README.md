@@ -22,25 +22,65 @@ An Acrobat add-on for preparing accounting work papers.
 
 ## Install
 
-1. Quit Acrobat.
-2. Copy `src/ReferenceTool.js` into your Acrobat **user JavaScripts folder**:
-   - **Windows:** `%APPDATA%\Adobe\Acrobat\DC\JavaScripts\`
-     (paste that into File Explorer's address bar; create the `JavaScripts` folder if it doesn't exist)
-   - **Mac:** `~/Library/Application Support/Adobe/Acrobat/DC/JavaScripts/`
-   - If neither location works: open Acrobat, press **Ctrl+J** (Mac: **Cmd+J**) to open the JavaScript console, type `app.getPath("user","javascript")` and press **Ctrl+Enter**. The console shows the correct folder.
-3. Start Acrobat and open a PDF.
+1. Go to the **[latest release](https://github.com/PhilipBanks0/Adobe-reference-tool/releases/latest)** and download `ReferenceTool-vX.Y.Z.zip`.
+2. Unzip it (right-click → **Extract All**). Don't run it from inside the zip.
+3. Close Acrobat.
+4. Install:
+   - **Windows:** double-click `Install.cmd`.
+   - **Mac:** right-click `install.command` → **Open**.
+5. Open Acrobat. Everything is under **Edit → Reference Tool**.
 
-**Where the buttons appear**
+The Windows installer doesn't need admin rights. It:
 
-- **Menu:** *Edit → Reference Tool* has every command.
-- **Toolbar buttons** (Place Tag, Calc Tape, Tag Check, Replace Page, Repair Tags) appear under Acrobat's add-on or custom tools. Where that is depends on the Acrobat version:
-  - Classic interface: *View → Tools → Add-on Tools*.
-  - New interface: look under *All tools*.
-- If you can't find the buttons, the *Edit* menu always works.
+- copies the add-on into every Acrobat version it finds (DC, 2020, …),
+- installs an updater and an uninstaller,
+- adds **Start menu → Reference Tool** shortcuts.
 
-To deploy to a team, copy the same file into each person's JavaScripts folder. IT can also push it to the application-level folder, for example `C:\Program Files\Adobe\Acrobat DC\Acrobat\Javascripts\`.
+**Where the toolbar buttons appear** (Place Tag, Calc Tape, Tag Check, Replace Page, Repair Tags) depends on the Acrobat version:
 
----
+- Classic interface: *View → Tools → Add-on Tools*.
+- New interface: *All tools*.
+- If you can't find them, the *Edit* menu always has every command.
+
+If the menu doesn't show up, go to *Preferences → JavaScript* and tick *Enable Acrobat JavaScript*.
+
+**Manual install:** copy `ReferenceTool.js` from the release into your Acrobat JavaScripts folder:
+
+- Windows: `%APPDATA%\Adobe\Acrobat\DC\JavaScripts\`
+- Mac: `~/Library/Application Support/Adobe/Acrobat/DC/JavaScripts/`
+
+## Updating
+
+- **In Acrobat:** *Edit → Reference Tool → Check for Updates*. Acrobat also checks quietly about once a week after it starts, and pops up only when there's a new version. To turn the automatic check off, set `autoUpdateCheck: false` in the settings. Acrobat may ask once whether it may connect to `api.github.com`; allow it.
+- **Windows:** close Acrobat and run *Start menu → Reference Tool → Update Reference Tool*. It:
+  1. shows what's new,
+  2. downloads the release,
+  3. checks it against the release's SHA-256 checksums,
+  4. installs it.
+- **Mac:** run `~/Library/Application Support/ReferenceTool/update.command`.
+
+To uninstall on Windows, use *Start menu → Reference Tool → Uninstall Reference Tool*. PDFs you've already tagged keep working.
+
+## Publishing a new release (maintainers)
+
+```
+node scripts/bump-version.js 0.3.0      # sets the version in package.json and ReferenceTool.js
+# edit CHANGELOG.md; the 0.3.0 section becomes the release notes
+git commit -am "Release 0.3.0"
+git tag v0.3.0
+git push && git push origin v0.3.0
+```
+
+Pushing the tag triggers the **Release** GitHub Action (`.github/workflows/release.yml`). It:
+
+1. runs the tests,
+2. checks that the tag matches the version,
+3. builds `ReferenceTool-v0.3.0.zip`, `ReferenceTool.js` and `SHA256SUMS.txt`,
+4. publishes them as a GitHub release.
+
+Everyone's updater picks up the new release from there. To build the files locally, run `npm run build` (output goes to `dist/`).
+
+**The repository must be public for updates to work.** The updater and Acrobat read releases without logging in.
 
 ## How to use
 
@@ -157,11 +197,11 @@ The top of `src/ReferenceTool.js` has a `cfg` block you can edit to change:
 
 ## Testing
 
-`test/run-tests.js` runs the add-on against a mock of Acrobat's JavaScript API. It covers tape maths and formatting, tag pairing, links after page reordering, Tag Check, Repair, Replace Page, Move Tag and Delete Tag.
+- `npm test`: the add-on's logic, run against a mock of Acrobat's JavaScript API.
+- `pwsh test/installer.tests.ps1`: Windows install, update (including a tampered-download check) and uninstall, run against a mock GitHub.
+- `bash test/mac-installer.test.sh`: the same for Mac.
 
-```
-npm test
-```
+The **Tests** GitHub Action runs all three on Linux, Windows (PowerShell 5.1 and 7) and macOS for every push.
 
 The mock can't show how Acrobat itself behaves, so a manual check in Acrobat Pro is also needed. Sample files are in `samples/`; regenerate them with `python3 samples/make_sample.py`.
 
@@ -178,6 +218,8 @@ The mock can't show how Acrobat itself behaves, so a manual check in Acrobat Pro
 - [ ] Use Acrobat's own *Organize Pages → Replace*, then **Repair Tags**. The tags are restored.
 - [ ] Test a landscape (rotated) page. The link sits on top of the tag.
 - [ ] Open the file in Acrobat Reader. The tags are visible and clickable.
+- [ ] *Check for Updates* reaches GitHub (allow the connection if Acrobat asks).
+- [ ] The Start menu *Update Reference Tool* shortcut reports "up to date" on the latest release.
 
 ## Roadmap ideas
 

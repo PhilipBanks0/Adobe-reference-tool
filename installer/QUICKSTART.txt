@@ -1,0 +1,30 @@
+Workpaper Reference Tool {{VERSION}}
+====================================
+
+INSTALL (Windows)
+  1. Unzip this folder (right-click > Extract All). Don't run it from inside the zip.
+  2. Close Adobe Acrobat.
+  3. Double-click Install.cmd.
+  4. Open Acrobat. The tools are under Edit > Reference Tool
+     (and as buttons under Acrobat's add-on / custom tools).
+
+INSTALL (Mac)
+  1. Unzip, close Acrobat.
+  2. Right-click install.command > Open (the first time Mac asks for confirmation).
+
+UPDATE
+  - In Acrobat: Edit > Reference Tool > Check for Updates.
+    Acrobat also checks quietly about once a week and tells you when there's a new version.
+  - Windows: Start menu > Reference Tool > Update Reference Tool
+    (downloads, verifies and installs the latest version - close Acrobat first).
+  - Mac: run update.command.
+
+UNINSTALL (Windows)
+  Start menu > Reference Tool > Uninstall Reference Tool.
+  PDFs you've already tagged are not affected.
+
+TRY IT
+  Open samples\sample-workpaper.pdf and follow the README:
+  https://github.com/PhilipBanks0/Adobe-reference-tool
+
+If the menu doesn't appear: Acrobat > Preferences > JavaScript > tick "Enable Acrobat JavaScript".

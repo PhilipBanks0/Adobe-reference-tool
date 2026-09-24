@@ -1,0 +1,33 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  addon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm test
+      - run: bash scripts/build-release.sh
+
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Installer tests (Windows PowerShell 5.1)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File test/installer.tests.ps1
+      - name: Installer tests (PowerShell 7)
+        shell: pwsh
+        run: pwsh -NoProfile -File test/installer.tests.ps1
+
+  mac-installer:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash test/mac-installer.test.sh

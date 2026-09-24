@@ -38,10 +38,41 @@ var ART_privReplacePages = app.trustedFunction(function (doc, opts) {
     app.endPriv();
 });
 
+var ART_privHttpGet = app.trustedFunction(function (url, onDone) {
+    app.beginPriv();
+    Net.HTTP.request({
+        cVerb: "GET",
+        cURL: url,
+        aHeaders: [
+            { name: "User-Agent", value: "ReferenceTool-Acrobat" },
+            { name: "Accept", value: "application/vnd.github+json" }
+        ],
+        oHandler: {
+            response: function (msg, uri, err) {
+                var body = null;
+                if (!err && msg) {
+                    try { body = SOAP.stringFromStream(msg); } catch (e) { err = e; }
+                }
+                onDone(err || null, body);
+            }
+        }
+    });
+    app.endPriv();
+});
+
+var ART_privLaunchURL = app.trustedFunction(function (url) {
+    app.beginPriv();
+    app.launchURL(url, true);
+    app.endPriv();
+});
+
 var ART_timer = null;
 
 var ARTool = (function () {
-    var VERSION = "0.1.0";
+    var VERSION = "0.2.0";
+    var REPO = "PhilipBanks0/Adobe-reference-tool";
+    var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
+    var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
     var REG_KEY = "ARTRegister";
     var CAPTURE_FIELD = "ART_CAPTURE";
     var TAG_PREFIX = "ART:T:";
@@ -58,7 +89,11 @@ var ARTool = (function () {
         tapeBorder: ["RGB", 0, 0.3, 0.7],
         // If clicks land in the wrong vertical spot during testing,
         // flip this to true (some Acrobat builds measure mouseY from the top).
-        mouseYFromTop: false
+        mouseYFromTop: false,
+        // Quietly check GitHub for a newer release when Acrobat starts
+        // (at most once every checkIntervalDays). Set false to turn off.
+        autoUpdateCheck: true,
+        checkIntervalDays: 7
     };
 
     var capture = null; // active click-capture state
@@ -976,11 +1011,112 @@ var ARTool = (function () {
         saveReg(doc, reg);
     }
 
+    // -----------------------------------------------------------------------
+    // Updates
+    // -----------------------------------------------------------------------
+    /** Compare "1.2.10" with "v1.3.0": returns -1, 0 or 1. */
+    function compareVersions(a, b) {
+        function parts(v) {
+            var core = String(v || "").replace(/^\s*v/i, "").split(/[-+]/)[0];
+            var p = core.split(".");
+            var out = [];
+            for (var i = 0; i < 3; i++) { out.push(parseInt(p[i], 10) || 0); }
+            return out;
+        }
+        var x = parts(a);
+        var y = parts(b);
+        for (var i = 0; i < 3; i++) {
+            if (x[i] < y[i]) { return -1; }
+            if (x[i] > y[i]) { return 1; }
+        }
+        return 0;
+    }
+
+    /** Pull what we need out of a GitHub "latest release" API response. */
+    function parseRelease(body) {
+        var r = fromJSON(body);
+        if (!r || !r.tag_name) { return null; }
+        return {
+            version: String(r.tag_name).replace(/^v/i, ""),
+            url: r.html_url || RELEASES_URL,
+            notes: String(r.body || "").replace(/\r/g, "")
+        };
+    }
+
+    function shorten(text, max) {
+        text = trim(text);
+        return text.length > max ? text.slice(0, max) + "\n..." : text;
+    }
+
+    function offerUpdate(rel) {
+        var ans = app.alert({
+            cTitle: "Reference Tool update",
+            nIcon: 2,
+            nType: 2,
+            cMsg: "Version " + rel.version + " is available (you have " + VERSION + ").\n\n" +
+                (rel.notes ? shorten(rel.notes, 600) + "\n\n" : "") +
+                "To install it: close Acrobat and run \"Update Reference Tool\" from the Start menu " +
+                "(Windows), or download the new release and run the installer.\n\n" +
+                "Open the download page now?"
+        });
+        if (ans === 4) { openReleasesPage(rel.url); }
+    }
+
+    function openReleasesPage(url) {
+        try { ART_privLaunchURL(url || RELEASES_URL); } catch (e) {
+            app.alert("Open this page in your browser:\n\n" + (url || RELEASES_URL));
+        }
+    }
+
+    /**
+     * Ask GitHub for the latest release. quiet = true for the automatic
+     * startup check: say nothing unless there is an update.
+     */
+    function checkForUpdates(doc, quiet) {
+        setGlobal("ART_lastUpdateCheck", new Date().getTime());
+        var handled = false;
+        function done(err, body) {
+            if (handled) { return; }
+            handled = true;
+            var rel = err ? null : parseRelease(body);
+            if (!rel) {
+                if (quiet) { return; }
+                var ans = app.alert({
+                    cTitle: "Check for Updates",
+                    nIcon: 2,
+                    nType: 2,
+                    cMsg: "Acrobat couldn't reach GitHub to check for updates" +
+                        (err ? " (" + err + ")" : "") + ".\n\n" +
+                        "You have version " + VERSION + ". Open the releases page in your browser?"
+                });
+                if (ans === 4) { openReleasesPage(RELEASES_URL); }
+                return;
+            }
+            if (compareVersions(rel.version, VERSION) > 0) {
+                offerUpdate(rel);
+            } else if (!quiet) {
+                app.alert({ cTitle: "Check for Updates", nIcon: 3, cMsg: "You have the latest version (" + VERSION + ")." });
+            }
+        }
+        try {
+            ART_privHttpGet(LATEST_API, done);
+        } catch (e) {
+            done(e, null);
+        }
+        return handled;
+    }
+
+    function autoCheckDue() {
+        if (!cfg.autoUpdateCheck) { return false; }
+        var last = Number(getGlobal("ART_lastUpdateCheck", 0)) || 0;
+        return (new Date().getTime() - last) > cfg.checkIntervalDays * 86400000;
+    }
+
     function about() {
         app.alert({
             cTitle: "Reference Tool",
             nIcon: 3,
-            cMsg: "Workpaper Reference Tool " + VERSION + "\n\n" +
+            cMsg: "Workpaper Reference Tool " + VERSION + "\n" + RELEASES_URL + "\n\n" +
                 "Place Tag: click Place Tag, click the figure; go to the support, click Place Tag, click the matching figure.\n" +
                 "Calc Tape: enter the calculation, then click where the tape goes.\n" +
                 "Tag Check: list all tags and flag unmatched or broken ones.\n" +
@@ -1001,6 +1137,7 @@ var ARTool = (function () {
         { id: "repairTags", label: "Repair Tags", tip: "Restore lost tags/tapes and refresh links", toolbar: true },
         { id: "moveTag", label: "Move Tag", tip: "Move a tag to a new spot", toolbar: false },
         { id: "deleteTag", label: "Delete Tag", tip: "Delete both sides of a tag", toolbar: false },
+        { id: "checkForUpdates", label: "Check for Updates", tip: "See if a newer version is available", toolbar: false },
         { id: "about", label: "About / Help", tip: "How to use the Reference Tool", toolbar: false }
     ];
 
@@ -1015,9 +1152,10 @@ var ARTool = (function () {
         moveTag: moveTag,
         deleteTag: deleteTag,
         about: about,
+        checkForUpdates: function (doc) { return checkForUpdates(doc, false); },
         run: function (id, doc) {
             try {
-                if (!doc && id !== "about") { app.alert("Open a PDF first."); return; }
+                if (!doc && id !== "about" && id !== "checkForUpdates") { app.alert("Open a PDF first."); return; }
                 return api[id](doc);
             } catch (e) {
                 app.alert("Reference Tool error in " + id + ":\n\n" + e + (e && e.lineNumber ? " (line " + e.lineNumber + ")" : ""));
@@ -1035,7 +1173,12 @@ var ARTool = (function () {
         },
         _pendingRemoval: null,
         // exposed for testing
+        _autoCheck: function () {
+            try { if (autoCheckDue()) { checkForUpdates(null, true); } } catch (e) {}
+        },
         _internal: {
+            compareVersions: compareVersions,
+            parseRelease: parseRelease,
             computeTape: computeTape,
             formatTape: formatTape,
             parseAmount: parseAmount,
@@ -1077,3 +1220,6 @@ var ARTool = (function () {
 })();
 
 ARTool.installUI();
+
+// Quiet update check a few seconds after Acrobat starts.
+var ART_updateTimer = app.setTimeOut("ARTool._autoCheck()", 8000);

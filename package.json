@@ -1,10 +1,12 @@
 {
   "name": "adobe-reference-tool",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Acrobat Pro add-on for accounting work papers: paired reference tags and calculator tapes",
   "private": true,
   "scripts": {
-    "test": "node test/run-tests.js"
+    "test": "node test/run-tests.js",
+    "build": "bash scripts/build-release.sh",
+    "test:installer": "pwsh -NoProfile -File test/installer.tests.ps1"
   },
   "license": "UNLICENSED"
 }

@@ -1,0 +1,34 @@
+name: Release
+
+# Push a tag like v0.3.0 to build and publish a release:
+#   node scripts/bump-version.js 0.3.0   (then edit CHANGELOG.md)
+#   git commit -am "Release 0.3.0" && git tag v0.3.0 && git push && git push origin v0.3.0
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm test
+      - name: Build release files
+        run: bash scripts/build-release.sh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          gh release create "$TAG" \
+            "dist/ReferenceTool-v$VERSION.zip" dist/ReferenceTool.js dist/SHA256SUMS.txt \
+            --title "Reference Tool $VERSION" \
+            --notes-file dist/RELEASE_NOTES.md

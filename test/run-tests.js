@@ -14,7 +14,7 @@ const assert = require("assert");
 
 // ---------------------------------------------------------------- mocks
 function makeEnv() {
-  const env = { alerts: [], alertAnswers: [], responses: [], dialogs: [], dialogResults: [], timers: [] };
+  const env = { httpRequests: [], launched: [], alerts: [], alertAnswers: [], responses: [], dialogs: [], dialogResults: [], timers: [] };
 
   class Annot {
     constructor(doc, props) { this._doc = doc; Object.assign(this, props); if (!this.name) this.name = "auto" + Math.random(); this.rect = props.rect.slice(); }
@@ -91,6 +91,7 @@ function makeEnv() {
       return "ok";
     },
     browseForDoc() { return { cPath: "/new-statement.pdf", cFS: "DOS" }; },
+    launchURL(u) { env.launched.push(u); },
     setTimeOut(expr) { env.timers.push(expr); return { id: 1 }; },
     clearTimeOut() {},
     addSubMenu() {}, addMenuItem() {}, addToolButton(o) { (env.buttons = env.buttons || []).push(o.cLabel); }
@@ -102,7 +103,13 @@ function makeEnv() {
     color: { blue: ["RGB", 0, 0, 1], transparent: ["T"] },
     border: { d: "dashed" }, highlight: { n: "none" }, display: { noPrint: 3 },
     global: { setPersistent() {} },
-    console: { println: console.log }
+    console: { println: console.log },
+    Net: { HTTP: { request(o) {
+      env.httpRequests.push(o.cURL);
+      const r = env.httpResponse || { err: "offline" };
+      o.oHandler.response(r.body || null, o.cURL, r.err || undefined);
+    } } },
+    SOAP: { stringFromStream: s => s }
   });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "src", "ReferenceTool.js"), "utf8"), ctx, { filename: "ReferenceTool.js" });
   env.ctx = ctx;
@@ -399,6 +406,73 @@ test("errors are caught and shown, not thrown", () => {
   env.responses.push("A-1");
   env.ART.run("placeTag", doc);
   assert.ok(env.alerts.some(a => /Reference Tool error/.test(a)));
+});
+
+
+const release = (tag, notes) => ({ body: JSON.stringify({ tag_name: tag, html_url: "https://github.com/PhilipBanks0/Adobe-reference-tool/releases/tag/" + tag, body: notes || "" }) });
+
+test("version comparison", () => {
+  const { compareVersions } = makeEnv().ART._internal;
+  assert.strictEqual(compareVersions("0.2.0", "0.1.9"), 1);
+  assert.strictEqual(compareVersions("v0.10.0", "0.9.9"), 1);
+  assert.strictEqual(compareVersions("1.0.0", "v1.0.0"), 0);
+  assert.strictEqual(compareVersions("1.0", "1.0.1"), -1);
+  assert.strictEqual(compareVersions("1.2.0-beta", "1.2.0"), 0);
+});
+
+test("check for updates: newer release offers the download page", () => {
+  const env = makeEnv();
+  env.httpResponse = release("v9.0.0", "New: tick marks");
+  env.alertAnswers.push(4);
+  env.ART.run("checkForUpdates", null);
+  assert.ok(/api\.github\.com\/repos\/PhilipBanks0\/Adobe-reference-tool\/releases\/latest/.test(env.httpRequests[0]));
+  assert.ok(/Version 9\.0\.0 is available/.test(env.alerts[0]) && /tick marks/.test(env.alerts[0]));
+  assert.ok(/releases\/tag\/v9\.0\.0/.test(env.launched[0]));
+});
+
+test("check for updates: up to date", () => {
+  const env = makeEnv();
+  env.httpResponse = release("v" + env.ART.version);
+  env.ART.run("checkForUpdates", null);
+  assert.ok(/latest version/.test(env.alerts[0]));
+  assert.strictEqual(env.launched.length, 0);
+});
+
+test("check for updates: offline falls back to the releases page", () => {
+  const env = makeEnv();
+  env.httpResponse = { err: "network error" };
+  env.alertAnswers.push(4);
+  env.ART.run("checkForUpdates", null);
+  assert.ok(/couldn't reach GitHub/.test(env.alerts[0]));
+  assert.ok(/releases\/latest$/.test(env.launched[0]));
+});
+
+test("automatic startup check is silent unless there is an update", () => {
+  let env = makeEnv();
+  env.httpResponse = release("v" + env.ART.version);
+  env.runTimers();
+  assert.strictEqual(env.httpRequests.length, 1, "checks on startup");
+  assert.strictEqual(env.alerts.length, 0, "no popup when up to date");
+  env = makeEnv();
+  env.httpResponse = { err: "offline" };
+  env.runTimers();
+  assert.strictEqual(env.alerts.length, 0, "no popup when offline");
+  env = makeEnv();
+  env.httpResponse = release("v99.0.0");
+  env.alertAnswers.push(3);
+  env.runTimers();
+  assert.strictEqual(env.alerts.length, 1, "tells you about a new version");
+});
+
+test("automatic check respects the interval and the off switch", () => {
+  let env = makeEnv();
+  env.ctx.global.ART_lastUpdateCheck = Date.now() - 86400000; // yesterday
+  env.runTimers();
+  assert.strictEqual(env.httpRequests.length, 0);
+  env = makeEnv();
+  env.ART.config.autoUpdateCheck = false;
+  env.runTimers();
+  assert.strictEqual(env.httpRequests.length, 0);
 });
 
 console.log("\n" + passed + " passed" + (process.exitCode ? ", some FAILED" : ""));
