@@ -405,6 +405,16 @@ test("clicking Place Tag again cancels click mode", () => {
   assert.strictEqual(doc._annots.length, 0);
 });
 
+test("protected (certified/secured) PDF gets a plain-English explanation", () => {
+  const env = makeEnv(); const doc = new env.Doc(2);
+  doc.addField = () => { const e = new Error("Security settings prevent access to this property or method."); e.name = "NotAllowedError"; throw e; };
+  env.responses.push("A-1");
+  env.ART.run("placeTag", doc);
+  const msg = env.alerts[env.alerts.length - 1];
+  assert.ok(/This PDF is protected/.test(msg) && /Combine Files/.test(msg), msg);
+  assert.ok(!/line \d+/.test(msg), "no raw error");
+});
+
 test("rotated pages: link rectangle converted to rotated space", () => {
   const env = makeEnv(); const doc = new env.Doc(2); doc._rot[0] = 90;
   const r = env.ART._internal.toRotatedRect(doc, 0, [100, 200, 140, 214]);

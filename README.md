@@ -182,6 +182,7 @@ Repair Tags also rebuilds every link, which is useful after moving tags or reord
 
 - **Page reordering is safe.** Links find their partner by name when they're clicked, not by page number.
 - **Tags are locked** so a click goes to the link rather than selecting the comment. Use **Move Tag** and **Delete Tag** to change them.
+- **Protected PDFs** can't be tagged. Acrobat won't let anything be added to a PDF that's certified, digitally signed (blue bar at the top) or secured. Combine it into your work paper with *Combine Files*, or print it to PDF, and tag that copy.
 - **Don't flatten** the work paper until review is complete. Flattening turns tags and tapes into static marks with no links.
 - **Deleting a tape by hand:** Repair Tags will offer to restore it. Answer **No** to forget it.
 - **Browser PDF viewers:** tags and tapes are visible, but the jump between tags needs Acrobat or Reader, because the links use Acrobat JavaScript.

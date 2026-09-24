@@ -69,7 +69,7 @@ var ART_privLaunchURL = app.trustedFunction(function (url) {
 var ART_timer = null;
 
 var ARTool = (function () {
-    var VERSION = "0.2.1";
+    var VERSION = "0.2.2";
     var REPO = "PhilipBanks0/Adobe-reference-tool";
     var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
     var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -1130,6 +1130,30 @@ var ARTool = (function () {
     // -----------------------------------------------------------------------
     // Toolbar buttons and menu
     // -----------------------------------------------------------------------
+    /** True when Acrobat refused because the PDF is protected. */
+    function isProtectedError(e) {
+        var t = String((e && e.name) || "") + " " + String(e);
+        return /NotAllowedError|Security settings prevent/i.test(t);
+    }
+
+    function showError(id, e) {
+        if (isProtectedError(e)) {
+            app.alert({
+                cTitle: "Reference Tool",
+                nIcon: 1,
+                cMsg: "This PDF is protected, so Acrobat won't let anything be added to it. " +
+                    "It may be certified or digitally signed (look for a blue bar at the top), " +
+                    "or secured with a password or restrictions.\n\n" +
+                    "To reference it, work from an unprotected copy:\n" +
+                    "- combine it into your work paper with Combine Files and tag the combined PDF, or\n" +
+                    "- print it to \"Adobe PDF\"/\"Microsoft Print to PDF\" and use that copy.\n\n" +
+                    "Keep the original file with your support if the signature matters."
+            });
+            return;
+        }
+        app.alert("Reference Tool error in " + id + ":\n\n" + e + (e && e.lineNumber ? " (line " + e.lineNumber + ")" : ""));
+    }
+
     var COMMANDS = [
         { id: "placeTag", label: "Place Tag", tip: "Place a reference tag (statement, then support)", toolbar: true },
         { id: "calcTape", label: "Calc Tape", tip: "Calculator that leaves a tape on the page", toolbar: true },
@@ -1159,11 +1183,11 @@ var ARTool = (function () {
                 if (!doc && id !== "about" && id !== "checkForUpdates") { app.alert("Open a PDF first."); return; }
                 return api[id](doc);
             } catch (e) {
-                app.alert("Reference Tool error in " + id + ":\n\n" + e + (e && e.lineNumber ? " (line " + e.lineNumber + ")" : ""));
+                showError(id, e);
             }
         },
         _onCapture: function (doc, page, x, y) {
-            try { onCapture(doc, page, x, y); } catch (e) { app.alert("Reference Tool error:\n\n" + e); }
+            try { onCapture(doc, page, x, y); } catch (e) { showError("placing", e); }
         },
         _removeCapture: function () {
             var d = api._pendingRemoval;

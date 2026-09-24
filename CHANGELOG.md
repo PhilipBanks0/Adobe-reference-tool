@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2 - 2026-09-24
+
+- Protected PDFs (certified, digitally signed or secured) now get a plain explanation and what to do, instead of a raw "NotAllowedError: Security settings prevent access" message. Acrobat doesn't allow tags or tapes on those files; combine them into the work paper or print them to PDF first.
+
 ## 0.2.1 - 2026-09-24
 
 - Fix: the Reference Tool menu didn't appear in the new Acrobat interface (Acrobat 2024 and later), which has no Edit menu. It now appears under **Menu → Reference Tool** (the ☰ Menu button at the top left). Classic Acrobat still uses **Edit → Reference Tool**.
