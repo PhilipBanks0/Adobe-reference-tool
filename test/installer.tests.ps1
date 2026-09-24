@@ -146,6 +146,10 @@ try {
         Check "declined permission falls back to per-user folder" ((JsVersion $dcJs) -eq $current) $r.out
         Check "explains why and what to do" ($r.out -match "program folder" -and $r.out -match "Run Install.cmd again")
     }
+    # ---- running straight from the source folder (installer\ + src\) --------
+    $r = Run (Join-Path $repoRoot 'installer/install.ps1') @('-Quiet', '-NoShortcuts')
+    Check "installs from the source folder layout" ($r.code -eq 0 -and (JsVersion (Join-Path $appJs 'ReferenceTool.js')) -eq $current) $r.out
+
     Remove-Item Env:\REFTOOL_ACROBAT_APP_DIRS
 }
 finally {

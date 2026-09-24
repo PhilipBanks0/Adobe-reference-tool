@@ -32,6 +32,9 @@ function Get-ToolVersion([string]$path) {
 }
 
 $src = Join-Path $here 'ReferenceTool.js'
+# Running from a copy of the source code (installer\ next to src\) also works.
+$repoSrc = Join-Path (Split-Path -Parent $here) 'src\ReferenceTool.js'
+if (-not (Test-Path -LiteralPath $src) -and (Test-Path -LiteralPath $repoSrc)) { $src = $repoSrc }
 if (-not (Test-Path -LiteralPath $src)) {
     throw "ReferenceTool.js was not found next to the installer ($here). Unzip the whole release first."
 }
