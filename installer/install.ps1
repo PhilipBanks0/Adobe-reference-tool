@@ -20,8 +20,9 @@
                   Acrobat, Ctrl+J then app.getPath("app","javascript") shows it.
                   Remembered, so updates use it too.
 
-  Exit codes: 0 = done; 3 = Acrobat was found, but the add-on couldn't be put in
-  its program folder (the output says why and what to do).
+  Exit codes: 0 = done; 2 = the -AcrobatFolder given doesn't exist; 3 = Acrobat
+  was found, but the add-on couldn't be put in its program folder (the output
+  says why and what to do).
 #>
 [CmdletBinding()]
 param(
@@ -237,7 +238,10 @@ if (-not $UserFolderOnly) {
     if ($AcrobatFolder) {
         $customFolder = Resolve-AcrobatFolder $AcrobatFolder
         if (-not (Test-Path -LiteralPath (Split-Path -Parent $customFolder))) {
-            throw "The Acrobat folder '$AcrobatFolder' doesn't exist. In Acrobat, press Ctrl+J, type app.getPath(`"app`",`"javascript`") and press Ctrl+Enter to see the right one."
+            Tell "The Acrobat folder '$AcrobatFolder' doesn't exist. Nothing was installed."
+            Tell "In Acrobat, press Ctrl+J, type app.getPath(`"app`",`"javascript`") and press"
+            Tell "Ctrl+Enter to see the right folder."
+            exit 2
         }
     } elseif ($lastInfo -and $lastInfo.acrobatFolder -and (Test-Path -LiteralPath (Split-Path -Parent $lastInfo.acrobatFolder))) {
         $customFolder = [string]$lastInfo.acrobatFolder

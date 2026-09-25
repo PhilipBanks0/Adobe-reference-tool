@@ -4,10 +4,6 @@
 
 - **Fixed: the Reference Tool menu didn't show in the new Acrobat.** It's now under **Menu → Plugins → For editing → Reference Tool**, next to your other add-ons (in classic Acrobat: **Edit → Reference Tool**). Acrobat accepted the old spot directly in Menu without an error, but never displayed it.
 
-## 0.3.9 - 2026-09-25
-
-- Version bump.
-
 ## 0.3.8 - 2026-09-25
 
 - **Fixed: installing from a network drive (for example Q:) never reached Acrobat's program folder.** After you click Yes, Windows runs the copy in a separate administrator window, and that window can't see network drives. The installer now copies the add-on to your PC's temp folder first, so it works from anywhere.

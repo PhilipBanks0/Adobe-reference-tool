@@ -32,6 +32,9 @@ function Check([string]$name, [bool]$ok, [string]$detail = '') {
     else { $script:failed++; Write-Host "  FAIL $name $detail" }
 }
 function Run([string]$file, [string[]]$argList) {
+    # Windows PowerShell 5.1 turns a child's error output into a terminating
+    # error under 'Stop', which would end the whole test run.
+    $ErrorActionPreference = 'Continue'
     $out = & $ps -NoProfile -ExecutionPolicy Bypass -File $file @argList 2>&1 | Out-String
     return @{ code = $LASTEXITCODE; out = $out }
 }
@@ -240,7 +243,7 @@ try {
     $r = Run $install @('-Quiet', '-NoShortcuts')
     Check "remembers -AcrobatFolder for updates" ($r.code -eq 0 -and (JsVersion $customJs) -eq $current) $r.out
     $r = Run $install @('-Quiet', '-NoShortcuts', '-AcrobatFolder', (Join-Path $tmp 'no/such/folder'))
-    Check "rejects an Acrobat folder that doesn't exist" ($r.code -ne 0 -and $r.out -match "doesn't exist") $r.out
+    Check "rejects an Acrobat folder that doesn't exist (exit 2)" ($r.code -eq 2 -and $r.out -match "doesn't exist" -and $r.out -notmatch 'Installed add-on|Installed version') $r.out
 
     Remove-Item Env:\REFTOOL_ACROBAT_APP_DIRS
 }
