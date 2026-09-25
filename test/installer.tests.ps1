@@ -15,6 +15,16 @@ New-Item -ItemType Directory -Path $tmp | Out-Null
 $env:APPDATA = Join-Path $tmp 'Roaming'
 $env:LOCALAPPDATA = Join-Path $tmp 'Local'
 New-Item -ItemType Directory -Force -Path $env:APPDATA, $env:LOCALAPPDATA | Out-Null
+# Never touch a real Acrobat: no program folders, and a throwaway key in place
+# of Acrobat's allowed-link-schemes policy (created below, on Windows only).
+$env:REFTOOL_ACROBAT_APP_DIRS = ';'
+$onWindows = ($IsWindows -or $PSVersionTable.PSEdition -eq 'Desktop')
+$policyRoot = 'HKCU:\Software\ReferenceToolTests\' + [guid]::NewGuid().ToString('N')
+$policyKey = "$policyRoot\cDefaultLaunchURLPerms"
+$noListKey = "$policyRoot\NoList"
+$env:REFTOOL_ACROBAT_POLICY_KEYS = "$policyKey;$noListKey"
+$adobePerms = 'version:2|shell:3|acrobat:2|mailto:2|file:1'
+function SchemePerms { (Get-ItemProperty -LiteralPath $policyKey).tSchemePerms }
 
 $script:passed = 0; $script:failed = 0
 function Check([string]$name, [bool]$ok, [string]$detail = '') {
@@ -124,6 +134,11 @@ try {
     $appJs = Join-Path $tmp 'Program Files/Adobe/Acrobat DC/Acrobat/Javascripts'
     New-Item -ItemType Directory -Force -Path $appJs | Out-Null
     $env:REFTOOL_ACROBAT_APP_DIRS = $appJs
+    if ($onWindows) {
+        New-Item -Path $policyKey -Force | Out-Null
+        New-Item -Path $noListKey -Force | Out-Null
+        Set-ItemProperty -LiteralPath $policyKey -Name 'tSchemePerms' -Value $adobePerms
+    }
     # leftover per-user copy from an older version
     New-Item -ItemType Directory -Force -Path (Join-Path $acro 'DC/JavaScripts') | Out-Null
     Copy-Item -LiteralPath (Join-Path $pkgCur.stage 'ReferenceTool.js') -Destination $dcJs -Force
@@ -132,11 +147,19 @@ try {
     Check "removes old per-user copy (no double load)" (-not (Test-Path $dcJs))
     $info = Get-Content (Join-Path $appDir 'installed.json') -Raw | ConvertFrom-Json
     Check "records program-folder target" (@($info.targets) -contains $appJs)
+    if ($onWindows) {
+        Check "allows the update link in Acrobat" ((SchemePerms) -eq "$adobePerms|reftool-update:2") (SchemePerms)
+        Check "doesn't create a missing scheme list" ($null -eq (Get-ItemProperty -LiteralPath $noListKey).tSchemePerms)
+        # An Acrobat update rewrites the list; a stale entry must be replaced, not doubled.
+        Set-ItemProperty -LiteralPath $policyKey -Name 'tSchemePerms' -Value "$adobePerms|reftool-update:3"
+    }
     $r = Run (Join-Path $appDir 'update.ps1') (@('-Yes') + $common)
     Check "update replaces program-folder copy" ((JsVersion (Join-Path $appJs 'ReferenceTool.js')) -eq $new) $r.out
     Check "update doesn't recreate per-user copy" (-not (Test-Path $dcJs))
+    if ($onWindows) { Check "update puts the link entry back once" ((SchemePerms) -eq "$adobePerms|reftool-update:2") (SchemePerms) }
     $r = Run (Join-Path $appDir 'uninstall.ps1') @('-Quiet')
     Check "uninstall removes program-folder copy" (-not (Test-Path (Join-Path $appJs 'ReferenceTool.js'))) $r.out
+    if ($onWindows) { Check "uninstall removes only the link entry" ((SchemePerms) -eq $adobePerms) (SchemePerms) }
 
     # ---- permission declined: falls back to the per-user folder -----------
     if (-not ($IsWindows -or $PSVersionTable.PSEdition -eq 'Desktop') -and ((& id -u) -ne '0')) {
@@ -165,6 +188,11 @@ try {
 finally {
     if ($server) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    if ($onWindows) {
+        Remove-Item -LiteralPath $policyRoot -Recurse -Force -ErrorAction SilentlyContinue
+        $testsKey = 'HKCU:\Software\ReferenceToolTests'
+        if ((Test-Path $testsKey) -and -not (Get-ChildItem $testsKey)) { Remove-Item $testsKey -Force }
+    }
 }
 
 Write-Host ""

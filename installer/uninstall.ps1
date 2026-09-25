@@ -42,10 +42,33 @@ foreach ($t in ($targets | Select-Object -Unique)) {
         try { Remove-Item -LiteralPath $f -Force; Say "  Removed $f" } catch { $needAdmin += $f }
     }
 }
-if ($needAdmin.Count -gt 0) {
+$adminCmds = @($needAdmin | ForEach-Object { "Remove-Item -LiteralPath $(Quote $_) -Force" })
+
+# Take "reftool-update" back out of Acrobat's allowed link schemes (see install.ps1).
+function Get-AcrobatUrlPolicyKeys {
+    if ($env:REFTOOL_ACROBAT_POLICY_KEYS) { return @($env:REFTOOL_ACROBAT_POLICY_KEYS -split ';' | Where-Object { $_ }) }
+    $out = @()
+    foreach ($product in @('DC', '2020')) {
+        $k = "HKLM:\SOFTWARE\Policies\Adobe\Adobe Acrobat\$product\FeatureLockDown\cDefaultLaunchURLPerms"
+        if (Test-Path -LiteralPath $k) { $out += $k }
+    }
+    return $out
+}
+foreach ($k in @(Get-AcrobatUrlPolicyKeys)) {
+    $cur = $null
+    try { $cur = [string](Get-ItemProperty -LiteralPath $k -Name 'tSchemePerms' -ErrorAction Stop).tSchemePerms } catch { }
+    if (-not $cur) { continue }
+    $parts = @($cur -split '\|')
+    $keep = @($parts | Where-Object { $_ -notlike 'reftool-update:*' })
+    if ($keep.Count -eq $parts.Count) { continue }
+    $new = $keep -join '|'
+    try { Set-ItemProperty -LiteralPath $k -Name 'tSchemePerms' -Value $new }
+    catch { $adminCmds += "Set-ItemProperty -LiteralPath $(Quote $k) -Name 'tSchemePerms' -Value $(Quote $new)" }
+}
+
+if ($adminCmds.Count -gt 0) {
     Say "  Windows will ask for permission to remove the add-on from Acrobat's program folder..."
-    $cmd = ($needAdmin | ForEach-Object { "Remove-Item -LiteralPath $(Quote $_) -Force" }) -join '; '
-    [void](Invoke-Elevated $cmd)
+    [void](Invoke-Elevated ($adminCmds -join '; '))
     foreach ($f in $needAdmin) {
         if (Test-Path -LiteralPath $f) { Say "  Could not remove $f (permission declined)" } else { Say "  Removed $f" }
     }

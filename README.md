@@ -34,6 +34,7 @@ The Windows installer:
 
 - copies the add-on into Acrobat's program folder (`C:\Program Files\Adobe\Acrobat DC\Acrobat\Javascripts`). Current Acrobat versions only load add-ons from there, so **Windows asks once for permission: click Yes**,
 - installs an updater and an uninstaller,
+- lets Acrobat start the updater: it registers a `reftool-update:` link and adds it to Acrobat's allowed link types (same permission prompt),
 - adds **Start menu → Reference Tool** shortcuts.
 
 **Adding the buttons to your toolbar** (Reference, Calc Tape, Tag Check, Replace Page, Repair Tags):
@@ -56,7 +57,7 @@ If the menu doesn't show up, go to *Preferences → JavaScript* and tick *Enable
   2. checks it against the release's SHA-256 checksums,
   3. installs it (Windows asks for permission once).
 
-  Restart Acrobat when it's done. The first time, Acrobat may ask whether it can open the `reftool-update` link or connect to `api.github.com`; allow it. To turn the weekly check off, set `autoUpdateCheck: false` in the settings.
+  Restart Acrobat when it's done. The first time, Acrobat may ask whether it can connect to `api.github.com`; allow it. If **Yes** does nothing (an Acrobat update can reset its allowed link types), run the Start menu updater below once; it turns the link back on. To turn the weekly check off, set `autoUpdateCheck: false` in the settings.
 - **Windows:** close Acrobat and run *Start menu → Reference Tool → Update Reference Tool*. It:
   1. shows what's new,
   2. downloads the release,

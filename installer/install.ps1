@@ -7,6 +7,8 @@
     admin permission (UAC). If that's declined, it falls back to the per-user
     folder, which only older Acrobat versions read.
   - Installs the updater and uninstaller to %LOCALAPPDATA%\ReferenceTool.
+  - Registers a "reftool-update:" link that starts the updater, and adds it to
+    Acrobat's allowed link schemes (same admin prompt) so "Install now" works.
   - Adds Start menu shortcuts: "Update Reference Tool", "Uninstall Reference Tool".
 
   Run Install.cmd (double-click) or:
@@ -105,6 +107,28 @@ function Invoke-Elevated([string]$command) {
 
 function Quote([string]$s) { return "'" + ($s -replace "'", "''") + "'" }
 
+# Acrobat only hands a link to Windows if its scheme is allowed in the machine
+# policy list (tSchemePerms, 2 = allow). Without an entry, "Install now" in
+# Acrobat silently does nothing. Adobe's own updates can rewrite the list, so
+# every install (and so every update) puts the entry back.
+$UpdateScheme = 'reftool-update'
+function Get-AcrobatUrlPolicyKeys {
+    # Tests can point this at a throwaway key.
+    if ($env:REFTOOL_ACROBAT_POLICY_KEYS) { return @($env:REFTOOL_ACROBAT_POLICY_KEYS -split ';' | Where-Object { $_ }) }
+    $out = @()
+    foreach ($product in @('DC', '2020')) {
+        $k = "HKLM:\SOFTWARE\Policies\Adobe\Adobe Acrobat\$product\FeatureLockDown\cDefaultLaunchURLPerms"
+        if (Test-Path -LiteralPath $k) { $out += $k }
+    }
+    return $out
+}
+function Get-SchemePerms([string]$key) {
+    try { return [string](Get-ItemProperty -LiteralPath $key -Name 'tSchemePerms' -ErrorAction Stop).tSchemePerms } catch { return $null }
+}
+function Test-SchemeAllowed([string]$key) {
+    return (@((Get-SchemePerms $key) -split '\|') -contains "$($UpdateScheme):2")
+}
+
 $appTargets = @()
 if (-not $UserFolderOnly) { $appTargets = @(Get-AcrobatAppJsDirs) }
 $installed = @()
@@ -123,20 +147,44 @@ foreach ($t in $appTargets) {
     }
 }
 
-if ($needAdmin.Count -gt 0) {
-    Say "  Windows will ask for permission to install into Acrobat's program folder..."
-    $cmds = @('$ErrorActionPreference = ''Stop''')
-    foreach ($t in $needAdmin) {
-        $cmds += "if (-not (Test-Path -LiteralPath $(Quote $t))) { New-Item -ItemType Directory -Force -Path $(Quote $t) | Out-Null }"
-        $cmds += "Copy-Item -LiteralPath $(Quote $src) -Destination $(Quote (Join-Path $t 'ReferenceTool.js')) -Force"
+$adminCmds = @()
+foreach ($t in $needAdmin) {
+    $adminCmds += "if (-not (Test-Path -LiteralPath $(Quote $t))) { New-Item -ItemType Directory -Force -Path $(Quote $t) | Out-Null }"
+    $adminCmds += "Copy-Item -LiteralPath $(Quote $src) -Destination $(Quote (Join-Path $t 'ReferenceTool.js')) -Force"
+}
+
+# Allow the "reftool-update:" link in Acrobat. Only an existing list is
+# extended: writing one from scratch could drop Adobe's built-in blocks.
+$policyKeys = @()
+if (-not $UserFolderOnly) {
+    foreach ($k in @(Get-AcrobatUrlPolicyKeys)) {
+        $cur = Get-SchemePerms $k
+        if (-not $cur -or (Test-SchemeAllowed $k)) { continue }
+        $keep = @($cur -split '\|' | Where-Object { $_ -and $_ -notlike "$($UpdateScheme):*" })
+        $new = ($keep + "$($UpdateScheme):2") -join '|'
+        $policyKeys += $k
+        try { Set-ItemProperty -LiteralPath $k -Name 'tSchemePerms' -Value $new }
+        catch { $adminCmds += "Set-ItemProperty -LiteralPath $(Quote $k) -Name 'tSchemePerms' -Value $(Quote $new)" }
     }
-    [void](Invoke-Elevated ($cmds -join '; '))
+}
+
+if ($adminCmds.Count -gt 0) {
+    Say "  Windows will ask for permission to install into Acrobat's program folder..."
+    [void](Invoke-Elevated ((@('$ErrorActionPreference = ''Stop''') + $adminCmds) -join '; '))
     foreach ($t in $needAdmin) {
         if ((Get-ToolVersion (Join-Path $t 'ReferenceTool.js')) -eq $version) { $installed += $t }
     }
 }
 
 foreach ($t in $installed) { Say "  Installed add-on to $t" }
+if ($policyKeys.Count -gt 0) {
+    if (@($policyKeys | Where-Object { -not (Test-SchemeAllowed $_) }).Count -eq 0) {
+        Say "  Allowed Acrobat to open the updater link"
+    } else {
+        Say "  (Could not allow the updater link in Acrobat, so 'Install now' there may do nothing."
+        Say "   Use Start menu > Reference Tool > Update Reference Tool instead.)"
+    }
+}
 
 $userDirs = @(Get-UserJsDirs)
 if ($installed.Count -gt 0) {
