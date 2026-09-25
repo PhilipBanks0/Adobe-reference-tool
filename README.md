@@ -32,7 +32,7 @@ An Acrobat add-on for preparing accounting work papers.
 
 The Windows installer:
 
-- copies the add-on into Acrobat's program folder (`C:\Program Files\Adobe\Acrobat DC\Acrobat\Javascripts`). Current Acrobat versions only load add-ons from there, so **Windows asks once for permission: click Yes**,
+- copies the add-on into Acrobat's program folder (`C:\Program Files\Adobe\Acrobat DC\Acrobat\Javascripts`, or `C:\Program Files (x86)\...` for 32-bit Acrobat). Current Acrobat versions only load add-ons from there, so **Windows asks once for permission: click Yes**,
 - installs an updater and an uninstaller,
 - lets Acrobat start the updater: it registers a `reftool-update:` link and adds it to Acrobat's allowed link types (same permission prompt),
 - adds **Start menu → Reference Tool** shortcuts.
@@ -45,9 +45,17 @@ The Windows installer:
 
 If the menu doesn't show up, go to *Preferences → JavaScript* and tick *Enable Acrobat JavaScript*.
 
+**If the installer says NOT FINISHED**, the add-on isn't in Acrobat's program folder yet, and the installer says why:
+
+- *Permission was declined:* run `Install.cmd` again and click **Yes**.
+- *Your account isn't an administrator / security software stopped it / the copy failed:* the installer prints a note to send IT, with the exact folder. IT can enter an administrator's name and password when you run `Install.cmd`, or copy `ReferenceTool.js` into that folder themselves. The note also includes an optional `icacls` command that lets later updates install without IT.
+- *Acrobat wasn't found:* in Acrobat, press Ctrl+J, type `app.getPath("app","javascript")` and press Ctrl+Enter. Then, in a Command Prompt in the installer folder, run `Install.cmd -AcrobatFolder "<the folder it shows>"`.
+
+Installing from a network drive is fine: the installer copies the add-on to your PC first, because Windows' administrator window can't see network drives.
+
 **Manual install:** copy `ReferenceTool.js` from the release into your Acrobat JavaScripts folder:
 
-- Windows: `C:\Program Files\Adobe\Acrobat DC\Acrobat\Javascripts\` (needs admin). To find the exact folder, open the JavaScript console with Ctrl+J and run `app.getPath("app","javascript")`.
+- Windows: `C:\Program Files\Adobe\Acrobat DC\Acrobat\Javascripts\`, or `C:\Program Files (x86)\Adobe\Acrobat DC\Acrobat\Javascripts\` for 32-bit Acrobat (needs admin). To find the exact folder, open the JavaScript console with Ctrl+J and run `app.getPath("app","javascript")` (Ctrl+Enter runs it). Copy the file from a folder on your PC, not a network drive: Windows' administrator copy can't see network drives.
 - Mac: `~/Library/Application Support/Adobe/Acrobat/DC/JavaScripts/`
 
 ## Updating

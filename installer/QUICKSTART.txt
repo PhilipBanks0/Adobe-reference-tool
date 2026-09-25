@@ -28,3 +28,7 @@ TRY IT
   https://github.com/PhilipBanks0/Adobe-reference-tool
 
 If the menu doesn't appear: Acrobat > Preferences > JavaScript > tick "Enable Acrobat JavaScript".
+
+IF THE INSTALLER SAYS "NOT FINISHED"
+  It says why, and what to do. If IT is needed, it prints a note you can send them
+  (the exact folder, and an optional command so later updates don't need them).

@@ -126,6 +126,9 @@ try {
     if (-not $installer) { throw "install.ps1 was not found in the downloaded release." }
 
     & $installer.FullName -Quiet
+    if ($LASTEXITCODE -eq 3) {
+        throw "version $latest couldn't be put in Acrobat's program folder (see above), so Acrobat will keep using the version it has."
+    }
     $now = Get-InstalledVersion
     if ($now -ne $latest) { throw "Install finished but the installed version is '$now', expected '$latest'." }
     Write-Host "Updated to version $latest."

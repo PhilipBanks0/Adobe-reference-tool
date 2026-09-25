@@ -167,7 +167,14 @@ try {
         $r = Run (Join-Path $pkgCur.stage 'install.ps1') @('-NoShortcuts')
         & chmod 755 $appJs
         Check "declined permission falls back to per-user folder" ((JsVersion $dcJs) -eq $current) $r.out
-        Check "explains why and what to do" ($r.out -match "program folder" -and $r.out -match "Run Install.cmd again")
+        Check "explains why and what to do" ($r.code -eq 3 -and $r.out -match "NOT FINISHED" -and $r.out -match "program folder") $r.out
+        # Already in place (e.g. IT copied it in): no permission needed.
+        $r = Run (Join-Path $pkgCur.stage 'install.ps1') @('-Quiet', '-NoShortcuts')
+        $appFile = Join-Path $appJs 'ReferenceTool.js'
+        & chmod 444 $appFile; & chmod 555 $appJs
+        $r = Run (Join-Path $pkgCur.stage 'install.ps1') @('-NoShortcuts')
+        & chmod 755 $appJs; & chmod 644 $appFile
+        Check "same version already in place: no permission prompt" ($r.code -eq 0 -and $r.out -notmatch 'Windows will ask') $r.out
     }
     # ---- running straight from the source folder (installer\ + src\) --------
     $r = Run (Join-Path $repoRoot 'installer/install.ps1') @('-Quiet', '-NoShortcuts')
@@ -182,6 +189,58 @@ try {
         $r = Run (Join-Path $appDir 'uninstall.ps1') @('-Quiet')
         Check "uninstall removes the update link" (-not (Test-Path 'HKCU:\Software\Classes\reftool-update'))
     }
+
+    # ---- program folder can't be written: says why and what to do ----------
+    # A folder can't be created inside a file, even by an administrator, so the
+    # copy fails the same way on every OS. REFTOOL_TEST_ELEVATION stands in for
+    # the Windows permission box; REFTOOL_TEST_ACCOUNT for the kind of account.
+    $notDir = Join-Path $tmp 'not-a-folder.txt'
+    Set-Content -LiteralPath $notDir -Value 'x'
+    $env:REFTOOL_ACROBAT_APP_DIRS = Join-Path $notDir 'Javascripts'
+    $install = Join-Path $pkgCur.stage 'install.ps1'
+    if (Test-Path $dcJs) { Remove-Item $dcJs -Force }
+
+    $env:REFTOOL_TEST_ACCOUNT = 'standard'; $env:REFTOOL_TEST_ELEVATION = 'declined'
+    $r = Run $install @('-NoShortcuts')
+    Check "not an administrator: exits 3" ($r.code -eq 3) $r.out
+    Check "not an administrator: warns before the prompt" ($r.out -match "ask for an administrator's name and password") $r.out
+    Check "not an administrator: says why" ($r.out -match "isn't an administrator on this PC, and no administrator") $r.out
+    Check "not an administrator: IT note names the folder and icacls" ($r.out -match 'Ask IT' -and $r.out.Contains($env:REFTOOL_ACROBAT_APP_DIRS) -and $r.out -match 'icacls ".+ReferenceTool\.js" /grant ".+:M"') $r.out
+    Check "not an administrator: no success message" ($r.out -notmatch 'Installed version|Reinstalled version|Open Acrobat and look') $r.out
+    Check "not an administrator: still copies to the per-user folder" ((JsVersion $dcJs) -eq $current)
+
+    $env:REFTOOL_TEST_ACCOUNT = 'admin'
+    $r = Run $install @('-NoShortcuts')
+    Check "clicked No: says to click Yes, no IT note" ($r.code -eq 3 -and $r.out -match 'click Yes' -and $r.out -notmatch 'Ask IT') $r.out
+
+    $env:REFTOOL_TEST_ELEVATION = 'blocked'
+    $r = Run $install @('-NoShortcuts')
+    Check "blocked: points at security software and IT" ($r.code -eq 3 -and $r.out -match 'security software' -and $r.out -match 'Ask IT') $r.out
+
+    $env:REFTOOL_TEST_ELEVATION = 'run'
+    $r = Run $install @('-NoShortcuts')
+    Check "admin step runs from a script file and reports its error" ($r.code -eq 3 -and $r.out -match 'copying the add-on failed:\s*\r?\n\s+\S') $r.out
+
+    $r = Run $install @('-Quiet', '-NoShortcuts')
+    Check "-Quiet still shows the problem" ($r.code -eq 3 -and $r.out -match 'NOT FINISHED') $r.out
+
+    $r = Run (Join-Path $appDir 'update.ps1') (@('-Yes') + $common)
+    Check "update says the new version couldn't be installed (exit 1)" ($r.code -eq 1 -and $r.out -match "couldn't be put in Acrobat's program folder") $r.out
+    Remove-Item Env:\REFTOOL_TEST_ACCOUNT, Env:\REFTOOL_TEST_ELEVATION
+
+    # ---- Acrobat installed somewhere else: -AcrobatFolder -----------------
+    $env:REFTOOL_ACROBAT_APP_DIRS = ';'
+    $custom = Join-Path $tmp 'Other Adobe/Acrobat'
+    New-Item -ItemType Directory -Force -Path $custom | Out-Null
+    Set-Content -LiteralPath (Join-Path $custom 'Acrobat.exe') -Value ''
+    $customJs = Join-Path (Join-Path $custom 'Javascripts') 'ReferenceTool.js'
+    $r = Run $install @('-Quiet', '-NoShortcuts', '-AcrobatFolder', $custom)
+    Check "-AcrobatFolder installs into that Acrobat's Javascripts folder" ($r.code -eq 0 -and (JsVersion $customJs) -eq $current) $r.out
+    Remove-Item -LiteralPath $customJs
+    $r = Run $install @('-Quiet', '-NoShortcuts')
+    Check "remembers -AcrobatFolder for updates" ($r.code -eq 0 -and (JsVersion $customJs) -eq $current) $r.out
+    $r = Run $install @('-Quiet', '-NoShortcuts', '-AcrobatFolder', (Join-Path $tmp 'no/such/folder'))
+    Check "rejects an Acrobat folder that doesn't exist" ($r.code -ne 0 -and $r.out -match "doesn't exist") $r.out
 
     Remove-Item Env:\REFTOOL_ACROBAT_APP_DIRS
 }

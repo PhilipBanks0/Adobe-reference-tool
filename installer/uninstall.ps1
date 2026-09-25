@@ -25,15 +25,44 @@ if (Test-Path -LiteralPath $acroRoot) {
     Get-ChildItem -LiteralPath $acroRoot -Directory | ForEach-Object { $targets += (Join-Path $_.FullName 'JavaScripts') }
 }
 
-function Invoke-Elevated([string]$command) {
-    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-    try {
-        $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -WindowStyle Hidden `
-            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $enc)
-        return ($p.ExitCode -eq 0)
-    } catch { return $false }
-}
 function Quote([string]$s) { return "'" + ($s -replace "'", "''") + "'" }
+
+# Same approach as install.ps1: one visible administrator window running a
+# script file (no hidden encoded command, which security software blocks).
+# Returns 'ok', 'declined' (permission box answered No or closed) or 'blocked'.
+function Invoke-Elevated([string[]]$steps) {
+    $work = Join-Path ([IO.Path]::GetTempPath()) ('ReferenceTool-uninstall-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $work | Out-Null
+    $scriptPath = Join-Path $work 'admin-steps.ps1'
+    $logPath = Join-Path $work 'admin-result.txt'
+    $lines = @('$ErrorActionPreference = ''Stop''', 'Write-Host ''Reference Tool: removing it from Adobe Acrobat...''') +
+        @($steps) + @(('Set-Content -LiteralPath ' + (Quote $logPath) + ' -Value ok'))
+    [IO.File]::WriteAllText($scriptPath, ($lines -join "`r`n"), (New-Object Text.UTF8Encoding $true))
+    try {
+        if ($env:REFTOOL_TEST_ELEVATION -eq 'declined') { return 'declined' }
+        if ($env:REFTOOL_TEST_ELEVATION -eq 'blocked' -or $env:OS -ne 'Windows_NT') { return 'blocked' }
+        $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if (-not (Test-Path -LiteralPath $psExe)) { $psExe = 'powershell.exe' }
+        $psi = New-Object Diagnostics.ProcessStartInfo
+        $psi.FileName = $psExe
+        $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $scriptPath + '"'
+        $psi.Verb = 'runas'
+        $psi.UseShellExecute = $true
+        $proc = [Diagnostics.Process]::Start($psi)
+        if ($proc) { $proc.WaitForExit() }
+        if (Test-Path -LiteralPath $logPath) { return 'ok' }
+        return 'blocked'
+    } catch {
+        $e = $_.Exception
+        while ($e) {
+            if ($e -is [ComponentModel.Win32Exception] -and $e.NativeErrorCode -eq 1223) { return 'declined' }
+            $e = $e.InnerException
+        }
+        return 'blocked'
+    } finally {
+        Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
 
 $needAdmin = @()
 foreach ($t in ($targets | Select-Object -Unique)) {
@@ -48,8 +77,9 @@ $adminCmds = @($needAdmin | ForEach-Object { "Remove-Item -LiteralPath $(Quote $
 function Get-AcrobatUrlPolicyKeys {
     if ($env:REFTOOL_ACROBAT_POLICY_KEYS) { return @($env:REFTOOL_ACROBAT_POLICY_KEYS -split ';' | Where-Object { $_ }) }
     $out = @()
-    foreach ($product in @('DC', '2020')) {
-        $k = "HKLM:\SOFTWARE\Policies\Adobe\Adobe Acrobat\$product\FeatureLockDown\cDefaultLaunchURLPerms"
+    $root = 'HKLM:\SOFTWARE\Policies\Adobe\Adobe Acrobat'
+    foreach ($product in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+        $k = "$root\$($product.PSChildName)\FeatureLockDown\cDefaultLaunchURLPerms"
         if (Test-Path -LiteralPath $k) { $out += $k }
     }
     return $out
@@ -68,9 +98,17 @@ foreach ($k in @(Get-AcrobatUrlPolicyKeys)) {
 
 if ($adminCmds.Count -gt 0) {
     Say "  Windows will ask for permission to remove the add-on from Acrobat's program folder..."
-    [void](Invoke-Elevated ($adminCmds -join '; '))
+    $result = Invoke-Elevated $adminCmds
     foreach ($f in $needAdmin) {
-        if (Test-Path -LiteralPath $f) { Say "  Could not remove $f (permission declined)" } else { Say "  Removed $f" }
+        if (Test-Path -LiteralPath $f) {
+            Write-Host "  Could not remove $f"
+            if ($result -eq 'declined') {
+                Write-Host "  (Permission was declined. If Windows asked for an administrator name and password"
+                Write-Host "   you don't have, ask IT to delete that file.)"
+            } else {
+                Write-Host "  (The permission step was blocked, probably by security software. Ask IT to delete that file.)"
+            }
+        } else { Say "  Removed $f" }
     }
 }
 

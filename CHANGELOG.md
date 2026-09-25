@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.8 - 2026-09-25
+
+- **Fixed: installing from a network drive (for example Q:) never reached Acrobat's program folder.** After you click Yes, Windows runs the copy in a separate administrator window, and that window can't see network drives. The installer now copies the add-on to your PC's temp folder first, so it works from anywhere.
+- **The installer says exactly why it couldn't finish, and what to do:** you clicked No, your account isn't an administrator, security software stopped it, or the copy failed (with the error). When IT is needed, it prints a note you can send them, with the exact folder and, optionally, a command that lets later updates install without them.
+- It warns before the permission box when your account isn't an administrator, so you know Windows will ask for an administrator's name and password.
+- The permission step now runs as a normal, visible PowerShell window instead of a hidden one with an encoded command, which security software tends to block.
+- If the add-on is already in Acrobat's folder (for example IT copied it in), running the installer again doesn't ask for permission.
+- Finds more Acrobat versions (2017, 2024 and others, 32- and 64-bit). If Acrobat is somewhere else, `Install.cmd -AcrobatFolder "<folder>"` installs there, and updates remember it.
+- Updates from Acrobat or the Start menu now report it when the new version couldn't be put in Acrobat's folder, instead of saying it was updated.
+
 ## 0.3.7 - 2026-09-25
 
 - Version bump.
