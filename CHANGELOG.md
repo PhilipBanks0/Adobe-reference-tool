@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.5 - 2026-09-25
+
+- Version bump.
+
 ## 0.3.4 - 2026-09-25
 
 - **Delete references by clicking them.** On the reference bar, click **Delete**, then click the tag. Outside reference mode, use **Menu → Reference Tool → Delete Tag**, then click any tag on any page.
