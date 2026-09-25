@@ -166,13 +166,13 @@ test("toolbar buttons install", () => {
   assert.deepStrictEqual(env.buttons, ["Reference", "Calc Tape", "Tag Check", "Replace Page", "Repair Tags"]);
 });
 
-test("menu goes under the new Acrobat 'Menu', falling back to Edit on classic Acrobat", () => {
+test("menu goes under Edit (new Acrobat: Menu > Plugins > For editing), not the hamburger menu", () => {
   let env = makeEnv();
-  assert.strictEqual(env.ART.menuParent, "AV2::HamburgerMenu");
-  assert.ok(env.menuItems.indexOf("Reference Tool") >= 0 && env.menuItems.indexOf("Check for Updates") >= 0);
-  // classic UI: no hamburger menu
-  env = (function () { const e = makeEnvWith(["Edit", "Tools", "Help"]); return e; })();
   assert.strictEqual(env.ART.menuParent, "Edit");
+  assert.ok(env.menuItems.indexOf("Reference Tool") >= 0 && env.menuItems.indexOf("Check for Updates") >= 0);
+  // The hamburger menu is only a last resort: it accepts submenus but doesn't show them.
+  env = makeEnvWith(["AV2::HamburgerMenu"]);
+  assert.strictEqual(env.ART.menuParent, "AV2::HamburgerMenu");
 });
 
 test("amount parsing", () => {

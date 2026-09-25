@@ -476,7 +476,8 @@ $running = Get-Process -Name 'Acrobat', 'AcroRd32' -ErrorAction SilentlyContinue
 if ($running) {
     Say "Acrobat is open - quit it completely (Menu > Exit application) and reopen it to load the new version."
 } else {
-    Say "Open Acrobat and look for Menu > Reference Tool (top-left Menu button; Edit > Reference Tool in classic Acrobat)."
+    Say "Open Acrobat and look for Menu > Plugins > For editing > Reference Tool (top-left Menu button;"
+    Say "Edit > Reference Tool in classic Acrobat)."
 }
 Say "If the menu doesn't appear: Acrobat > Preferences > JavaScript > tick 'Enable Acrobat JavaScript'."
 exit 0

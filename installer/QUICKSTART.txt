@@ -5,7 +5,7 @@ INSTALL (Windows)
   1. Unzip this folder (right-click > Extract All). Don't run it from inside the zip.
   2. Close Adobe Acrobat.
   3. Double-click Install.cmd.
-  4. Open Acrobat. The tools are under Menu > Reference Tool
+  4. Open Acrobat. The tools are under Menu > Plugins > For editing > Reference Tool
      (the Menu button at the top left; Edit > Reference Tool in classic Acrobat).
 
 INSTALL (Mac)
@@ -13,7 +13,7 @@ INSTALL (Mac)
   2. Right-click install.command > Open (the first time Mac asks for confirmation).
 
 UPDATE
-  - In Acrobat: Menu > Reference Tool > Check for Updates.
+  - In Acrobat: Reference Tool menu > Check for Updates.
     Acrobat also checks quietly about once a week and tells you when there's a new version.
   - Windows: Start menu > Reference Tool > Update Reference Tool
     (downloads, verifies and installs the latest version - close Acrobat first).

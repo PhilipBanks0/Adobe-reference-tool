@@ -69,7 +69,7 @@ var ART_privLaunchURL = app.trustedFunction(function (url) {
 var ART_timer = null;
 
 var ARTool = (function () {
-    var VERSION = "0.3.8";
+    var VERSION = "0.3.9";
     var REPO = "PhilipBanks0/Adobe-reference-tool";
     var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
     var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -1598,7 +1598,7 @@ var ARTool = (function () {
             cTitle: "Reference Tool",
             nIcon: 3,
             cMsg: "Workpaper Reference Tool " + VERSION + "\n" + RELEASES_URL + "\n\n" +
-                "Find these commands under Menu > Reference Tool (new Acrobat) or Edit > Reference Tool (classic).\n\n" +
+                "Find these commands under Menu > Plugins > For editing > Reference Tool (new Acrobat) or Edit > Reference Tool (classic).\n\n" +
                 "Reference Tool: click it, then click a figure and click its match (any page). Numbers run on automatically; " +
                 "use the bar at the top of the page to Undo, change Options or finish (Done).\n" +
                 "Calc Tape: enter the calculation, then click where the tape goes.\n" +
@@ -1841,9 +1841,11 @@ var ARTool = (function () {
         installUI: function () {
             var i;
             var c;
-            // New Acrobat interface: the hamburger "Menu" (top left).
-            // Classic interface: the Edit menu. Use the first that exists.
-            var parents = ["AV2::HamburgerMenu", "Edit", "Tools", "Help"];
+            // Edit first. Classic Acrobat shows it as Edit > Reference Tool; the new
+            // Acrobat shows add-on items from Edit under Menu > Plugins > For editing.
+            // The new Acrobat's top-level "AV2::HamburgerMenu" accepts a submenu without
+            // an error but never displays it (Acrobat 26.0, 2026-09-25), so it's last.
+            var parents = ["Edit", "Tools", "Help", "AV2::HamburgerMenu"];
             api.menuParent = null;
             for (i = 0; i < parents.length && !api.menuParent; i++) {
                 try {

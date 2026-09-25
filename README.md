@@ -28,7 +28,7 @@ An Acrobat add-on for preparing accounting work papers.
 4. Install:
    - **Windows:** double-click `Install.cmd`.
    - **Mac:** right-click `install.command` → **Open**.
-5. Open Acrobat. Everything is under **Menu → Reference Tool**: the Menu button at the top left. In classic Acrobat it's **Edit → Reference Tool**.
+5. Open Acrobat. Everything is in the **Reference Tool menu**: **Menu → Plugins → For editing → Reference Tool** (the Menu button at the top left, where Acrobat puts add-ons). In classic Acrobat it's **Edit → Reference Tool**.
 
 The Windows installer:
 
@@ -41,7 +41,7 @@ The Windows installer:
 
 - New interface: click the **⋯** at the bottom of the left-hand quick-tools bar, choose **Customize toolbar**, and add them from the add-on/custom tools section.
 - Classic interface: *View → Tools → Add-on Tools*.
-- If you can't find them, *Menu → Reference Tool* always has every command.
+- If you can't find them, the Reference Tool menu (*Menu → Plugins → For editing → Reference Tool*) always has every command.
 
 If the menu doesn't show up, go to *Preferences → JavaScript* and tick *Enable Acrobat JavaScript*.
 
@@ -60,7 +60,7 @@ Installing from a network drive is fine: the installer copies the add-on to your
 
 ## Updating
 
-- **In Acrobat:** *Menu → Reference Tool → Check for Updates*. Acrobat also checks quietly about once a week after it starts. When there's a new version, click **Yes**:
+- **In Acrobat:** *Reference Tool menu → Check for Updates*. Acrobat also checks quietly about once a week after it starts. When there's a new version, click **Yes**:
   1. the updater downloads it,
   2. checks it against the release's SHA-256 checksums,
   3. installs it (Windows asks for permission once).
@@ -107,7 +107,7 @@ Everyone's updater picks up the new release from there. To build the files local
 
 ### Reference (placing tags)
 
-1. Click **Reference** on the toolbar, or go to **Menu → Reference Tool → Reference Tool**.
+1. Click **Reference** on the toolbar, or go to **Reference Tool menu → Reference Tool**.
 2. The options panel opens. Check the next reference (e.g. `A-1`) and pick a colour and size, then click **Start**.
 3. Click the figure on the financial statements, then click the matching figure in the support, on any page.
 4. Keep going: the next click places `A-2`, then its match, and so on. You don't type numbers.
@@ -125,7 +125,7 @@ While reference mode is on, a small bar sits at the top of every page:
 
 The bar doesn't print and goes away when you finish.
 
-**Fixing mistakes later:** go to **Menu → Reference Tool → Delete Tag**, then click the tag on any page. **Yes** removes both sides. **No** removes only that one: start the Reference tool again and your first click puts it back.
+**Fixing mistakes later:** go to **Reference Tool menu → Delete Tag**, then click the tag on any page. **Yes** removes both sides. **No** removes only that one: start the Reference tool again and your first click puts it back.
 
 To jump between the two sides of a reference, click either tag with the normal Hand/Select tool.
 
@@ -177,7 +177,7 @@ Use this when a page needs a newer version, for example a reissued statement or 
 2. Choose the new PDF and which of its pages to use.
 3. Choose whether to carry over other comments on the page, such as reviewer notes.
 
-The tags and tapes go back in the same positions. If the figures on the new page sit somewhere else, use **Menu → Reference Tool → Move Tag**.
+The tags and tapes go back in the same positions. If the figures on the new page sit somewhere else, use **Reference Tool menu → Move Tag**.
 
 ### Repair Tags
 
@@ -221,7 +221,8 @@ The mock can't show how Acrobat itself behaves, so a manual check in Acrobat Pro
 
 **Manual test checklist (first run in Acrobat)**
 
-- [ ] The *Menu → Reference Tool* menu and the toolbar buttons appear.
+- [x] The Reference Tool menu appears under *Menu → Plugins → For editing* (verified in Acrobat 26.0, 32-bit, 2026-09-25).
+- [ ] The toolbar buttons appear.
 - [x] Reference: the tag lands where you click (verified in Acrobat 26.x), and clicking a tag jumps to its match.
   - If the height is off, set `mouseYFromTop: true`.
 - [ ] Clicking a tag jumps to its match, and back again.
