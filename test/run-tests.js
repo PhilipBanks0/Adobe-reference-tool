@@ -14,6 +14,7 @@ const assert = require("assert");
 
 // ---------------------------------------------------------------- mocks
 function makeEnvWith(menuParents) { return makeEnv(menuParents); }
+let docCount = 0;
 function makeEnv(menuParents) {
   const env = { menuParents: menuParents || null, httpRequests: [], launched: [], alerts: [], alertAnswers: [], responses: [], dialogs: [], dialogResults: [], timers: [], intervals: [], widgetUpdates: 0 };
 
@@ -31,15 +32,18 @@ function makeEnv(menuParents) {
   }
   class Doc {
     constructor(pages) {
-      this.numPages = pages; this.pageNum = 0; this.info = {}; this._annots = []; this._links = []; this._fields = {};
-      this._rot = {}; this.selectedAnnots = [];
+      const doc = this;
+      // Like Acrobat: changing the PDF marks it as needing a save.
+      this.numPages = pages; this.pageNum = 0; this._annots = []; this._links = []; this._fields = {}; this.dirty = false;
+      this.info = new Proxy({}, { set(o, k, v) { o[k] = v; doc.dirty = true; return true; } });
+      this._rot = {}; this.selectedAnnots = []; this.path = "/work-paper-" + (++docCount) + ".pdf";
     }
     syncAnnotScan() {}
     getAnnots(o) { const r = this._annots.filter(a => !o || a.page === o.nPage); return r.length ? r : null; }
     addAnnot(p) {
       if (p.page >= this.numPages) throw new Error("bad page");
       const a = new Annot(this, p);
-      this._annots.push(a);
+      this._annots.push(a); this.dirty = true;
       return a;
     }
     addLink(p, r) { const l = new Link(p, r); this._links.push(l); return l; }
@@ -48,14 +52,21 @@ function makeEnv(menuParents) {
     }
     addField(name, type, p, box) {
       let f = this._fields[name];
+      this.dirty = true;
       if (!f) {
-        const raw = { name, widgets: [], caption: "", setAction(ev, s) { this.script = s; }, buttonSetCaption(c) { this.caption = c; env.widgetUpdates += raw.widgets.length; } };
+        const raw = {
+          name, widgets: [], caption: "", value: "", actions: {}, type,
+          setAction(ev, s) { this.actions[ev] = s; if (ev === "MouseUp") this.script = s; },
+          buttonSetCaption(c) { this.caption = c; env.widgetUpdates += raw.widgets.length; },
+          setFocus() { env.focused = name; }
+        };
         // Like Acrobat: setting a property on a field redraws every widget it has.
         f = new Proxy(raw, { set(o, k, v) { o[k] = v; if (k !== "page") env.widgetUpdates += o.widgets.length; return true; } });
         this._fields[name] = f;
       }
       f.widgets.push({ page: p, box });
       f.page = f.widgets.length === 1 ? p : f.widgets.map(w => w.page);
+      f.rect = box.slice();
       return f;
     }
     getField(n) { return this._fields[n] || null; }
@@ -69,6 +80,7 @@ function makeEnv(menuParents) {
       // Worst case: the new page arrives with nothing on it.
       this._annots = this._annots.filter(a => a.page !== o.nPage);
       this._links = this._links.filter(l => l.page !== o.nPage);
+      for (const k of Object.keys(this._fields)) if (this._fields[k].page === o.nPage) delete this._fields[k];
       this._replaced = o;
     }
     scroll() {}
@@ -92,6 +104,37 @@ function makeEnv(menuParents) {
       runTimers();
     }
     status() { const f = this._fields["ART_BAR.status.p" + this.pageNum]; return f ? f.caption : null; }
+    // helper: run a field's action like Acrobat does (this = the document)
+    fire(f, trigger, ev) {
+      new (vm.runInContext("Function", ctx))("event", f.actions[trigger]).call(this, Object.assign({ target: f, rc: true }, ev));
+    }
+    // helper: type into a text field one key at a time (Keystroke events, like Acrobat)
+    type(name, text) {
+      for (const ch of text) {
+        const f = this._fields[name];
+        assert(f, "field " + name + " should exist");
+        const v = String(f.value);
+        const ev = { target: f, change: ch, value: v, selStart: v.length, selEnd: v.length, willCommit: false, rc: true };
+        if (f.actions.Keystroke) new (vm.runInContext("Function", ctx))("event", f.actions.Keystroke).call(this, ev);
+        if (ev.rc !== false) this._fields[name].value = v.slice(0, ev.selStart) + ev.change + v.slice(ev.selEnd);
+      }
+    }
+    // helper: leave a text field (key 2 = Enter, 1 = clicked elsewhere, 3 = Tab)
+    commit(name, key) {
+      const f = this._fields[name];
+      assert(f, "field " + name + " should exist");
+      if (f.actions.Keystroke) this.fire(f, "Keystroke", { value: String(f.value), willCommit: true, commitKey: key || 2 });
+      runTimers();
+    }
+    // helper: click a button field (at x, y on the page)
+    press(name, x, y) {
+      const f = this._fields[name];
+      assert(f, "button " + name + " should exist");
+      const script = f.script.replace(/this\.mouseX/g, x || 0).replace(/this\.mouseY/g, y || 0);
+      new (vm.runInContext("Function", ctx))("event", script).call(this, { target: f });
+      runTimers();
+    }
+    calc(id) { const f = this._fields["ART_CALC." + id]; return f ? (f.type === "button" ? f.caption : f.value) : null; }
   }
 
   let ctx;
@@ -133,7 +176,7 @@ function makeEnv(menuParents) {
 
   ctx = vm.createContext({
     app, JSON, Math, Date, String, Number, Array, Object, RegExp, Error, parseInt, parseFloat,
-    color: { blue: ["RGB", 0, 0, 1], transparent: ["T"] },
+    color: { blue: ["RGB", 0, 0, 1], transparent: ["T"] }, font: { Cour: "Courier", Helv: "Helvetica" },
     border: { d: "dashed", s: "solid" }, highlight: { n: "none", p: "push" }, display: { noPrint: 3 },
     global: { setPersistent() {} },
     console: { println: console.log },
@@ -150,6 +193,7 @@ function makeEnv(menuParents) {
   env.Doc = Doc;
   env.runTimers = runTimers;
   env.runIntervals = runIntervals;
+  env.followTimers = () => env.intervals.filter(t => /_followPage/.test(t.expr)).length;
   return env;
 }
 
@@ -166,6 +210,18 @@ function refPairs(env, doc, clicks, opts) {
   for (const c of clicks) doc.click(c[1], c[2], c[0]);
   env.ART.run("placeTag", doc);            // finish
 }
+// Make a tape with the calculator: type the lines, Place on page, click the page.
+function makeTape(env, doc, t, x, y) {
+  env.ART.run("calcTape", doc); env.runTimers();
+  if (t.titl) { doc.type("ART_CALC.titl", t.titl); doc.commit("ART_CALC.titl", 1); }
+  if (t.init !== undefined) { doc._fields["ART_CALC.init"].value = ""; doc.type("ART_CALC.init", t.init); doc.commit("ART_CALC.init", 1); }
+  for (const line of String(t.ents).split("\n")) { doc.type("ART_CALC.entr", line); doc.commit("ART_CALC.entr", 2); }
+  doc.press("ART_CALC.place");
+  doc.click(x, y);
+  return doc._annots.filter(a => a.name.startsWith("ART:P:")).pop();
+}
+const tapeBtn = (doc, tape) => doc._fields["ART_TBTN." + tape.name.slice(6)];
+const doubleClick = (doc, tape, x, y) => { const n = "ART_TBTN." + tape.name.slice(6); doc.press(n, x, y); doc.press(n, x, y); };
 const followLink = (env, doc, link) => { new (vm.runInContext("Function", env.ctx))(link.action).call(doc); return doc.pageNum; };
 
 console.log("Reference Tool tests");
@@ -240,7 +296,7 @@ test("reference mode: click, click, click - numbers run on without prompts", () 
   assert.strictEqual(env.dialogs.length, 1, "no more dialogs while placing");
   env.ART.run("placeTag", doc);           // finish
   assert.strictEqual(doc.fieldNames().length, 0, "all capture/bar fields removed");
-  assert.strictEqual(env.intervals.length, 0, "page-following timer stopped");
+  assert.strictEqual(env.followTimers(), 0, "page-following timer stopped");
   assert.deepStrictEqual(names(doc), ["ART:T:A-1:1", "ART:T:A-1:2", "ART:T:A-2:1", "ART:T:A-2:2"]);
   const reg = JSON.parse(doc.info.ARTRegister);
   assert.strictEqual(reg.pending, null);
@@ -378,10 +434,10 @@ test("status on a page visited earlier catches up when you go back", () => {
 test("closing the document stops reference mode's timer", () => {
   const env = makeEnv(); const doc = new env.Doc(5);
   env.ART.run("placeTag", doc);
-  assert.strictEqual(env.intervals.length, 1);
+  assert.strictEqual(env.followTimers(), 1);
   Object.defineProperty(doc, "pageNum", { get() { throw new Error("closed"); } });
   env.runIntervals(1);
-  assert.strictEqual(env.intervals.length, 0);
+  assert.strictEqual(env.followTimers(), 0);
   assert.strictEqual(env.ART.isActive(), false);
 });
 
@@ -418,82 +474,430 @@ test("toolbar buttons have icons; Reference button shows when active", () => {
     assert.strictEqual(row.length, 20, k + " row " + i)));
 });
 
-test("calc tape posts a monospaced comment where clicked", () => {
+test("tape maths: 250 x 12 adds 3,000, like an adding machine", () => {
+  const { computeTape, formatTape } = makeEnv().ART._internal;
+  const c = computeTape("1,000 Opening\n250 x 12 Rent\n-2 x 50 Refunds\nx 1.1 Gross-up\n1,200 / 12");
+  assert.strictEqual(c.errors.length, 0, c.errors.join());
+  assert.strictEqual(c.total, Math.round(((1000 + 3000 - 100) * 1.1 + 100) * 1e6) / 1e6);
+  const t = formatTape("Rent", c, "GR");
+  assert.ok(/ 3,000\.00  \+  250 x 12  Rent/.test(t), t);
+  assert.ok(/ 100\.00  -  2 x 50  Refunds/.test(t), t);
+  assert.ok(/ 100\.00  \+  1,200 \/ 12/.test(t), t);
+  assert.strictEqual(computeTape("10 x 0\n5 / 0").errors.length, 1, "divide by zero caught");
+  assert.strictEqual(computeTape("800 O/S cheque").rows[0].desc, "O/S cheque", "O/S is a description, not a divide");
+});
+
+test("calculator keys: + - act on the number typed, * / on the next number", () => {
+  const { calcKeyAction: k } = makeEnv().ART._internal;
+  const eq = (a, b) => assert.deepStrictEqual(a === null ? null : { line: a.line, next: a.next }, b);
+  eq(k("1,250", "+"), { line: "1,250", next: "" });
+  eq(k("800", "-"), { line: "-800", next: "" });
+  eq(k("(800)", "+"), { line: "(800)", next: "" });
+  eq(k("250", "*"), { line: null, next: "250 x " });
+  eq(k("250 x 12", "+"), { line: "250 x 12", next: "" });
+  eq(k("250 x 12", "-"), { line: "-250 x 12", next: "" });
+  eq(k("250 x 12", "/"), { line: null, next: "250 x 12 / " });
+  eq(k("250 x ", "/"), { line: null, next: "250 / " });
+  eq(k("x 1.05", "+"), { line: "x 1.05", next: "" });
+  eq(k("*1.05", "*"), { line: "x 1.05", next: "x " });
+  eq(k("x", "/"), { line: null, next: "/ " });
+  eq(k("", "-"), null);                  // a minus sign to start a negative number
+  eq(k("", "*"), null);                  // "*" then a number: multiply the total
+  eq(k("250 x ", "-"), null);            // a sign for the next number
+  eq(k("800 O", "/"), null);             // typing "O/S cheque"
+  eq(k("800 Year", "-"), null);          // typing "Year-end"
+  eq(k("800 2023", "/"), null);
+});
+
+test("Calc Tape opens a calculator on the page, not a pop-up window", () => {
   const env = makeEnv(); const doc = new env.Doc(3); doc.pageNum = 1;
-  env.dialogResults.push({ titl: "AR rollforward", ents: "1000\n+250\n-100", init: "GR" });
-  env.ART.run("calcTape", doc);
-  doc.click(50, 700);
-  const tape = doc._annots.find(a => a.name.startsWith("ART:P:"));
+  env.ART.run("calcTape", doc); env.runTimers();
+  assert.strictEqual(env.dialogs.length, 0, "no dialog");
+  const f = doc._fields["ART_CALC.entr"];
+  assert.ok(f && f.page === 1, "on the page being viewed");
+  assert.ok(f.box === undefined && f.rect[1] > 700 && f.rect[2] > 500, "top-right of the page: " + f.rect);
+  assert.strictEqual(env.focused, "ART_CALC.entr", "cursor in the Amount box");
+  assert.ok(Object.values(doc._fields).every(x => x.display === 3), "doesn't print");
+  assert.strictEqual(doc.calc("place"), "Place on page");
+  assert.ok(/type an amount/i.test(doc.calc("info")));
+});
+
+test("calculator: + - * / work the moment they're pressed", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  env.ART.run("calcTape", doc); env.runTimers();
+  const E = "ART_CALC.entr";
+  doc.type(E, "12,400+");
+  assert.strictEqual(doc.calc("entr"), "", "box cleared for the next number");
+  assert.strictEqual(doc.calc("totl"), "12,400.00", "total updates straight away");
+  doc.type(E, "800-");
+  assert.strictEqual(doc.calc("totl"), "11,600.00");
+  doc.type(E, "250*");
+  assert.strictEqual(doc.calc("entr"), "250 x ", "waits for the next number");
+  assert.ok(/250 x/.test(doc.calc("info")) && /next number/.test(doc.calc("info")), doc.calc("info"));
+  assert.strictEqual(doc.calc("totl"), "11,600.00", "nothing added yet");
+  doc.type(E, "12+");
+  assert.strictEqual(doc.calc("totl"), "14,600.00", "250 x 12 = 3,000 added");
+  doc.type(E, "*1.1");
+  assert.strictEqual(doc.calc("entr"), "*1.1", "* on an empty box multiplies the total by the next number");
+  doc.commit(E, 2);                                   // Enter
+  assert.strictEqual(doc.calc("totl"), "16,060.00");
+  assert.strictEqual(doc.calc("entr"), "");
+  assert.strictEqual(env.focused, E, "cursor back in the Amount box after Enter");
+  doc.type(E, "800 O/S cheque");                     // the / is part of the description
+  assert.strictEqual(doc.calc("entr"), "800 O/S cheque");
+  doc.commit(E, 2);
+  assert.strictEqual(doc.calc("totl"), "16,860.00");
+  doc.type(E, "/2+");
+  assert.strictEqual(doc.calc("totl"), "8,430.00");
+  doc.type(E, "-100+");
+  assert.strictEqual(doc.calc("totl"), "8,330.00", "negative typed with a minus sign");
+  assert.strictEqual(doc.calc("ents"), "12,400\n-800\n250 x 12\n*1.1\n800 O/S cheque\n/ 2\n-100");
+  assert.ok(/3,000\.00  \+  250 x 12/.test(doc.calc("prev")), doc.calc("prev"));
+  assert.ok(/8,330\.00  T  Total/.test(doc.calc("prev")));
+});
+
+test("calculator: a line it can't read stays in the box with an explanation", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  env.ART.run("calcTape", doc); env.runTimers();
+  const E = "ART_CALC.entr";
+  doc.type(E, "*5"); doc.commit(E, 2);
+  assert.ok(/Start with an amount/.test(doc.calc("info")), doc.calc("info"));
+  doc._fields[E].value = "";
+  doc.type(E, "hello"); doc.commit(E, 2);
+  assert.ok(/Can't read "hello"/.test(doc.calc("info")), doc.calc("info"));
+  assert.strictEqual(doc.calc("entr"), "hello", "left in the box to fix");
+  assert.strictEqual(doc.calc("ents"), "", "not added");
+  doc._fields[E].value = "";
+  doc.type(E, "5+"); doc.type(E, "250 x"); doc.commit(E, 2);
+  assert.ok(/number after x/.test(doc.calc("info")), doc.calc("info"));
+  assert.strictEqual(doc.calc("totl"), "5.00");
+});
+
+test("calculator: Place on page, then click - the tape keeps its lines for editing later", () => {
+  const env = makeEnv(); const doc = new env.Doc(3); doc.pageNum = 1;
+  const tape = makeTape(env, doc, { titl: "AR rollforward", ents: "1000\n+250\n-100", init: "GR" }, 50, 700);
   assert.ok(tape, "tape exists");
+  assert.strictEqual(Object.keys(doc._fields).filter(n => /^ART_CALC/.test(n)).length, 0, "calculator gone");
   assert.strictEqual(tape.page, 1);
   assert.strictEqual(tape.textFont, "Courier");
+  assert.ok(/^TAPE: AR rollforward/.test(tape.contents));
   assert.ok(/1,150\.00  T  Total/.test(tape.contents));
+  assert.ok(/Prepared by GR/.test(tape.contents));
   assert.ok(Math.abs(tape.rect[3] - 700) < 0.01 && Math.abs(tape.rect[0] - 50) < 0.01, "top-left at click");
+  const item = JSON.parse(doc.info.ARTRegister).items[tape.name];
+  assert.deepStrictEqual(item.src, { titl: "AR rollforward", ents: "1000\n+250\n-100", init: "GR" });
+  // The double-click button covers the figures, not the title line or the edges.
+  const b = tapeBtn(doc, tape);
+  assert.ok(b, "double-click button on the tape");
+  assert.strictEqual(b.display, 3, "button doesn't print");
+  const r = b.rect; const t = tape.rect;
+  assert.ok(r[0] > t[0] && r[2] < t[2] && r[3] > t[1], "inside the tape's edges: " + r + " / " + t);
+  assert.ok(r[1] <= t[3] - 5 - 8 * 1.2 + 0.01, "title line left clear to drag by");
 });
 
-test("calc tape preview and total update as you type", () => {
+test("calculator: a number left in the Amount box is added when you click Place", () => {
   const env = makeEnv(); const doc = new env.Doc(1);
-  let dlg = null; const shown = {};
-  env.ctx.app.execDialog = d => {
-    dlg = d;
-    const fields = { titl: "Bank rec", ents: "", init: "GR" };
-    const h = { load(o) { Object.assign(shown, o); Object.assign(fields, o); }, store() { return Object.assign({}, fields); }, enable() {} };
-    d.initialize(h);
-    assert.strictEqual(shown.totl, "", "empty to start");
-    fields.ents = "12,400 Cash"; d.ents(h);
-    assert.strictEqual(shown.totl, "12,400.00");
-    assert.ok(/12,400\.00 T  Total/.test(shown.prev), shown.prev);
-    fields.ents = "12,400 Cash\n-800 cheque"; d.ents(h);
-    assert.strictEqual(shown.totl, "11,600.00");
-    fields.ents = "12,400 Cash\n-800 cheque\n+"; d.ents(h);   // half-typed line
-    assert.strictEqual(shown.totl, "11,600.00", "total holds while a line is half typed");
-    fields.titl = "Bank reconciliation"; d.titl(h);
-    assert.ok(/TAPE: Bank reconciliation/.test(shown.prev));
-    return "cancel";
-  };
-  env.ART.run("calcTape", doc);
-  assert.ok(dlg && typeof dlg.ents === "function", "live handler on the entries box");
+  env.ART.run("calcTape", doc); env.runTimers();
+  doc.type("ART_CALC.entr", "5+"); doc.type("ART_CALC.entr", "7");
+  doc.commit("ART_CALC.entr", 1);                     // clicking Place leaves the box first
+  doc.press("ART_CALC.place"); doc.click(10, 500);
+  assert.ok(/12\.00  T/.test(doc._annots[0].contents), doc._annots[0].contents);
 });
 
-test("calc tape: type an amount, press Enter, it appears on the tape straight away", () => {
+test("calculator: Undo line, typing the lines directly, and Cancel", () => {
   const env = makeEnv(); const doc = new env.Doc(1);
-  let placed = null;
-  env.ctx.app.execDialog = d => {
-    const fields = {}; const shown = {};
-    const h = { load(o) { Object.assign(shown, o); Object.assign(fields, o); }, store() { return Object.assign({}, fields); }, enable() {}, focus(id) { h.focused = id; } };
-    d.initialize(h);
-    assert.strictEqual(h.focused, "entr", "cursor starts in the amount box");
-    fields.entr = "12,400 Cash per bank";
-    assert.strictEqual(d.validate(h), false, "Enter adds the line and keeps the dialog open");
-    assert.strictEqual(shown.totl, "12,400.00");
-    assert.strictEqual(fields.entr, "", "amount box cleared for the next number");
-    fields.entr = "-800 O/S cheque"; d.validate(h);
-    fields.entr = "+3,250 DIT"; d.addl(h);          // the Add button does the same
-    assert.strictEqual(shown.totl, "14,850.00");
-    assert.ok(/14,850\.00  T  Total/.test(shown.prev), shown.prev);
-    fields.entr = "hello"; assert.strictEqual(d.validate(h), false);
-    assert.ok(/Can't read "hello"/.test(shown.prev), "bad line explained, not added");
-    assert.strictEqual(fields.entr, "hello", "bad line left in the box to fix");
-    fields.entr = "";
-    assert.strictEqual(d.validate(h), true, "Enter on an empty box = Place on page");
-    d.commit(h); placed = fields.ents;
-    return "ok";
-  };
-  env.ART.run("calcTape", doc);
-  assert.strictEqual(env.alerts.filter(a => /error/i.test(a)).join(" | "), "");
-  assert.strictEqual(placed, "12,400 Cash per bank\n-800 O/S cheque\n+3,250 DIT");
-  doc.click(50, 700);
-  assert.ok(/14,850\.00  T  Total/.test(doc._annots[0].contents));
+  env.ART.run("calcTape", doc); env.runTimers();
+  doc.type("ART_CALC.entr", "5+6+");
+  doc.press("ART_CALC.undo");
+  assert.strictEqual(doc.calc("totl"), "5.00");
+  assert.strictEqual(doc.calc("ents"), "5");
+  doc.type("ART_CALC.ents", "\n20 fees"); doc.commit("ART_CALC.ents", 1);
+  assert.strictEqual(doc.calc("totl"), "25.00", "edited lines count when you leave the box");
+  doc.press("ART_CALC.place");
+  assert.ok(doc.getField("ART_CAP.p0"), "waiting for the click");
+  env.ART.run("calcTape", doc); env.runTimers();       // start again, then cancel
+  doc.type("ART_CALC.entr", "9+");
+  doc.press("ART_CALC.cancel");
+  assert.strictEqual(doc.fieldNames().length, 0);
+  assert.strictEqual(doc._annots.length, 0);
 });
 
-test("calc tape with bad entry reopens dialog, then works", () => {
+test("calculator follows the page you're viewing and can move to another corner", () => {
+  const env = makeEnv(); const doc = new env.Doc(6);
+  env.ART.run("calcTape", doc); env.runTimers();
+  doc.type("ART_CALC.titl", "Bank"); doc.type("ART_CALC.entr", "100+25");
+  doc.goTo(4);
+  const f = doc._fields["ART_CALC.entr"];
+  assert.strictEqual(f.page, 4, "moved to page 5");
+  assert.strictEqual(doc.calc("entr"), "25", "half-typed amount kept");
+  assert.strictEqual(doc.calc("titl"), "Bank");
+  assert.strictEqual(doc.calc("totl"), "100.00");
+  const x1 = f.rect[0], y1 = f.rect[1];
+  doc.press("ART_CALC.move");
+  const g = doc._fields["ART_CALC.entr"];
+  assert.ok(g.rect[1] < y1 - 300 && Math.abs(g.rect[0] - x1) < 1, "moved to the bottom-right corner");
+  doc.type("ART_CALC.entr", "+");
+  doc.press("ART_CALC.place"); doc.click(20, 300);
+  assert.strictEqual(doc._annots[0].page, 4);
+  assert.ok(/125\.00  T/.test(doc._annots[0].contents));
+});
+
+test("double-click a tape: the calculator opens filled in, and Update changes the tape in place", () => {
+  const env = makeEnv(); const doc = new env.Doc(2);
+  const tape = makeTape(env, doc, { titl: "Rent", ents: "250 x 12\n-500 credit", init: "GR" }, 60, 600);
+  const name = tape.name; const top = tape.rect[3]; const left = tape.rect[0];
+  doc.press("ART_TBTN." + name.slice(6), 80, 560);
+  assert.strictEqual(doc.calc("entr"), null, "a single click doesn't open it");
+  doubleClick(doc, tape, 80, 560);
+  assert.strictEqual(doc.calc("titl"), "Rent");
+  assert.strictEqual(doc.calc("ents"), "250 x 12\n-500 credit");
+  assert.strictEqual(doc.calc("init"), "GR");
+  assert.strictEqual(doc.calc("place"), "Update tape");
+  assert.strictEqual(doc.calc("totl"), "2,500.00");
+  doc.type("ART_CALC.entr", "100+");
+  doc.press("ART_CALC.place");
+  const after = doc._annots.filter(a => a.name.startsWith("ART:P:"));
+  assert.strictEqual(after.length, 1, "same tape, not a new one");
+  assert.strictEqual(after[0].name, name);
+  assert.ok(/2,600\.00  T  Total/.test(after[0].contents), after[0].contents);
+  assert.strictEqual(after[0].rect[3], top); assert.strictEqual(after[0].rect[0], left);
+  assert.ok(!doc.getField("ART_CAP.p0"), "no click needed to place it again");
+  assert.strictEqual(JSON.parse(doc.info.ARTRegister).items[name].src.ents, "250 x 12\n-500 credit\n100");
+  const b = tapeBtn(doc, after[0]);
+  assert.ok(b.rect[1] > after[0].rect[1] && b.rect[1] < after[0].rect[3], "button follows the taller tape");
+});
+
+test("select a tape and click Calc Tape: opens it for changing", () => {
   const env = makeEnv(); const doc = new env.Doc(1);
-  env.dialogResults.push({ titl: "", ents: "abc", init: "" }, { titl: "", ents: "5\n5", init: "" });
-  env.ART.run("calcTape", doc);
-  assert.ok(env.alerts.some(a => /fix these entries/.test(a)));
-  assert.strictEqual(env.dialogs.length, 2);
-  doc.click(10, 10);
-  assert.ok(/10\.00  T/.test(doc._annots[0].contents));
+  const tape = makeTape(env, doc, { ents: "5\n6" }, 60, 600);
+  doc.selectedAnnots = [tape];
+  env.ART.run("calcTape", doc); env.runTimers();
+  assert.strictEqual(doc.calc("place"), "Update tape");
+  assert.strictEqual(doc.calc("ents"), "5\n6");
+});
+
+const trim2 = n => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+test("tapes made before 0.4.0 get a double-click button and open with their lines", () => {
+  const env = makeEnv(); const doc = new env.Doc(2);
+  const { computeTape, formatTape } = env.ART._internal;
+  const text = formatTape("Old one", computeTape("12,400 Cash\n-800 O/S cheque\n=\n250 x 4 Rent\n(50) fee\nx 1.1"), "AB");
+  const old = doc.addAnnot({ type: "FreeText", page: 0, rect: [40, 400, 240, 520], name: "ART:P:oldtape", contents: text, textSize: 8 });
+  env.ART.run("tagCheck", doc);                       // any command, or Acrobat's list of open PDFs
+  env.runIntervals(1);
+  assert.ok(doc._fields["ART_TBTN.oldtape"], "button added when its page is viewed");
+  doubleClick(doc, old, 100, 450);
+  assert.strictEqual(doc.calc("titl"), "Old one");
+  assert.strictEqual(doc.calc("init"), "AB");
+  assert.strictEqual(doc.calc("ents"), "12,400.00 Cash\n-800.00 O/S cheque\n=\n250 x 4 Rent\n(50.00) fee\nx 1.1");
+  assert.strictEqual(doc.calc("totl"), trim2(computeTape("12,400 Cash\n-800 O/S cheque\n=\n250 x 4 Rent\n(50) fee\nx 1.1").total));
+});
+
+test("a posted tape reads back into the same lines", () => {
+  const { computeTape, formatTape, parseTapeText } = makeEnv().ART._internal;
+  const src = "1,000 Opening\n250 x 12 Rent\n-2 x 50 Refunds\n=\n(75) Bank fee\n- -30 reversal\nx 1.1 Gross-up\n/ 4\n= Per quarter";
+  const t1 = formatTape("Rent", computeTape(src), "GR");
+  const back = parseTapeText(t1);
+  assert.strictEqual(back.titl, "Rent"); assert.strictEqual(back.init, "GR");
+  assert.strictEqual(formatTape(back.titl, computeTape(back.ents), back.init), t1);
+  assert.strictEqual(parseTapeText("not a tape"), null);
+});
+
+test("tape watcher: protected PDFs and closed PDFs don't cause trouble", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  const text = "TAPE\n    5.00  +\n=======\n    5.00  T  Total\nPrepared 2026-01-01";
+  doc.addAnnot({ type: "FreeText", page: 0, rect: [0, 0, 300, 300], name: "ART:P:locked", contents: text, textSize: 8 });
+  let tries = 0;
+  doc.addField = () => { tries++; const e = new Error("Security settings prevent access"); e.name = "NotAllowedError"; throw e; };
+  env.ART.run("tagCheck", doc);
+  env.runIntervals(5);
+  assert.ok(tries <= 1, "not retried every tick: " + tries);
+  assert.strictEqual(env.alerts.filter(a => /error|protected/i.test(a)).length, 0, "no pop-ups from the background timer");
+  Object.defineProperty(doc, "pageNum", { get() { throw new Error("closed"); } });
+  env.runIntervals(1);
+  assert.strictEqual(env.ART._internal.watchState().docs.indexOf(doc), -1, "closed PDF forgotten");
+});
+
+test("calculator: + adds a highlighted amount too", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  env.ART.run("calcTape", doc); env.runTimers();
+  const f = doc._fields["ART_CALC.entr"];
+  f.value = "40";
+  doc.fire(f, "Keystroke", { change: "+", value: "40", selStart: 0, selEnd: 2, willCommit: false });
+  assert.strictEqual(doc.calc("totl"), "40.00");
+});
+
+test("a tape's text changed directly in Acrobat isn't undone by a later double-click edit", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  const tape = makeTape(env, doc, { titl: "Bank", ents: "12,400 Cash\n-800 O/S cheque" }, 50, 700);
+  tape.contents = tape.contents.replace("Cash", "Cash at bank").replace(/\n/g, "\r");   // edited in the tape; Acrobat uses \r
+  env.runIntervals(1);
+  doubleClick(doc, tape, 70, 660);
+  assert.strictEqual(doc.calc("ents"), "12,400.00 Cash at bank\n-800.00 O/S cheque");
+  doc.type("ART_CALC.entr", "5+"); doc.press("ART_CALC.place");
+  assert.ok(/Cash at bank/.test(tape.contents) && /11,605\.00  T/.test(tape.contents), tape.contents);
+});
+
+test("just viewing a PDF with tapes doesn't mark it as changed", () => {
+  const env = makeEnv(); const doc = new env.Doc(2);
+  makeTape(env, doc, { ents: "1\n2" }, 50, 700);
+  const regBefore = doc.info.ARTRegister;
+  const env2 = makeEnv();                            // Acrobat restarted, same PDF opened
+  Object.setPrototypeOf(doc, env2.Doc.prototype);
+  doc.dirty = false;
+  env2.ART.run("tagCheck", doc); doc.dirty = false;
+  env2.runIntervals(3);
+  assert.strictEqual(doc.dirty, false, "no 'Save changes?' for looking");
+  // An old tape gets its button, still without marking the PDF changed.
+  doc.addAnnot({ type: "FreeText", page: 1, rect: [40, 400, 240, 520], name: "ART:P:old", contents: "TAPE\n 5.00  +\n=====\n 5.00  T  Total\nPrepared 2026-01-01", textSize: 8 });
+  doc.dirty = false; doc.goTo(1);
+  assert.ok(doc._fields["ART_TBTN.old"]);
+  assert.strictEqual(doc.dirty, false);
+  assert.ok(regBefore);
+});
+
+test("a reference tag on a tape's figures still jumps to its match", () => {
+  const env = makeEnv(); const doc = new env.Doc(3);
+  const tape = makeTape(env, doc, { ents: "1\n2\n3\n4\n5" }, 50, 700);
+  refPairs(env, doc, [[0, 80, 650], [2, 300, 300]]);   // A-1 on the tape's total, its match on page 3
+  doc.pageNum = 0;
+  doc.press(tapeBtn(doc, tape).name, 80, 650);
+  assert.strictEqual(doc.pageNum, 2, "went to the match");
+  assert.strictEqual(doc.calc("entr"), null, "calculator didn't open");
+});
+
+test("calculator: the cursor comes back to Amount after it follows you to another page", () => {
+  const env = makeEnv(); const doc = new env.Doc(4);
+  env.ART.run("calcTape", doc); env.runTimers();
+  const f = doc._fields["ART_CALC.entr"];
+  doc.fire(f, "OnFocus", {});
+  env.focused = null;
+  doc.goTo(2); env.runTimers();
+  assert.strictEqual(env.focused, "ART_CALC.entr");
+  doc.fire(doc._fields["ART_CALC.entr"], "OnBlur", {});
+  env.focused = null;
+  doc.goTo(3); env.runTimers();
+  assert.strictEqual(env.focused, null, "not grabbed back if you'd clicked away");
+});
+
+test("calculator: another command doesn't lose the calculation; Calc Tape picks it up", () => {
+  const env = makeEnv(); const doc = new env.Doc(3);
+  env.ART.run("calcTape", doc); env.runTimers();
+  doc.type("ART_CALC.titl", "Accruals"); doc.type("ART_CALC.entr", "100+200+3");
+  env.dialogResults.push({});
+  env.ART.run("placeTag", doc);                      // Reference tool started instead
+  assert.strictEqual(doc.calc("entr"), null);
+  env.ART.run("placeTag", doc);                      // finish it
+  env.ART.run("calcTape", doc); env.runTimers();
+  assert.strictEqual(doc.calc("totl"), "300.00");
+  assert.strictEqual(doc.calc("entr"), "3");
+  assert.strictEqual(doc.calc("titl"), "Accruals");
+  assert.ok(/Picked up/.test(doc.calc("info")));
+  // Place, then abandon the click: still kept.
+  doc.press("ART_CALC.place");
+  env.ART.run("tagCheck", doc); env.ART.run("repairTags", doc);
+  env.ART.run("calcTape", doc); env.runTimers();
+  assert.strictEqual(doc.calc("totl"), "303.00");
+  doc.press("ART_CALC.cancel");                      // Cancel really clears it
+  env.ART.run("calcTape", doc); env.runTimers();
+  assert.strictEqual(doc.calc("totl"), "");
+});
+
+test("calculator: - on a highlighted amount starts a negative number instead of subtracting", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  env.ART.run("calcTape", doc); env.runTimers();
+  const f = doc._fields["ART_CALC.entr"];
+  f.value = "1250";
+  const ev = { change: "-", value: "1250", selStart: 0, selEnd: 4, willCommit: false, rc: true, target: f };
+  new (vm.runInContext("Function", env.ctx))("event", f.actions.Keystroke).call(doc, ev);
+  assert.strictEqual(ev.change, "-", "typed as a minus sign");
+  assert.strictEqual(doc.calc("ents"), "");
+});
+
+test("invisible buttons left by deleted tapes are tidied when the PDF is next used", () => {
+  const env = makeEnv(); const doc = new env.Doc(3);
+  const tape = makeTape(env, doc, { ents: "1" }, 50, 700);
+  env.runIntervals(1);
+  doc.pageNum = 2; tape.destroy();                    // deleted from the Comments list while on another page
+  env.runIntervals(1);
+  assert.ok(tapeBtn(doc, tape), "still there this session");
+  const env2 = makeEnv(); Object.setPrototypeOf(doc, env2.Doc.prototype);
+  env2.ART.run("tagCheck", doc); env2.runIntervals(1);
+  assert.strictEqual(tapeBtn(doc, tape), undefined, "tidied next session");
+});
+
+test("two tapes with the same name (page inserted from a copy) both keep working", () => {
+  const env = makeEnv(); const doc = new env.Doc(3);
+  const t1 = makeTape(env, doc, { titl: "One", ents: "1\n2" }, 50, 700);
+  const t2 = doc.addAnnot(Object.assign(t1.getProps(), { page: 2, contents: t1.contents.replace("One", "Copy") }));
+  doc.addField("ART_TBTN." + t1.name.slice(6), "button", 2, [55, 680, 100, 660]);   // Acrobat merges the buttons
+  doc.goTo(2); doc.goTo(0); doc.goTo(2);
+  assert.strictEqual(tapeBtn(doc, t1).widgets.length, 2, "shared button left alone");
+  doc.press(tapeBtn(doc, t1).name, 70, 670); doc.press(tapeBtn(doc, t1).name, 70, 670);
+  assert.strictEqual(doc.calc("titl"), "Copy", "opens the tape on the page you're looking at");
+  assert.ok(t2);
+});
+
+test("resizing a tape re-fits the text instead of cutting it off", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  const { tapeSize } = env.ART._internal;
+  const tape = makeTape(env, doc, { titl: "Bank rec", ents: "12,400 Balance per bank\n+3,250 Deposit in transit\n-800 O/S cheque" }, 50, 700);
+  const r0 = tape.rect.slice(); const w0 = r0[2] - r0[0]; const h0 = r0[3] - r0[1];
+  assert.strictEqual(tape.textSize, 8);
+  // Drag the right edge in to 60% of the width.
+  tape.rect = [r0[0], r0[1], r0[0] + w0 * 0.6, r0[3]];
+  env.runIntervals(1);
+  assert.ok(tape.textSize <= 5 && tape.textSize >= 4.25, "smaller text: " + tape.textSize);
+  let s = tapeSize(tape.contents, tape.textSize);
+  assert.ok(Math.abs(tape.rect[2] - tape.rect[0] - s[0]) < 0.01 && Math.abs(tape.rect[3] - tape.rect[1] - s[1]) < 0.01, "box fits the text exactly");
+  assert.ok(tape.rect[2] - tape.rect[0] <= w0 * 0.6 + 0.01, "no wider than you dragged it: " + (tape.rect[2] - tape.rect[0]));
+  assert.ok(tape.rect[3] - tape.rect[1] < h0 * 0.7, "shorter too, so the text isn't cut off at the bottom");
+  assert.strictEqual(tape.rect[0], r0[0]); assert.strictEqual(tape.rect[3], r0[3]);
+  assert.strictEqual(tape.richContents[0].textSize, tape.textSize, "the text itself is resized");
+  // Drag the bottom edge down: the whole tape scales up.
+  const r1 = tape.rect.slice();
+  tape.rect = [r1[0], r1[3] - (r1[3] - r1[1]) * 3, r1[2], r1[3]];
+  env.runIntervals(1);
+  assert.ok(tape.textSize > 10, "bigger text: " + tape.textSize);
+  s = tapeSize(tape.contents, tape.textSize);
+  assert.ok(Math.abs(tape.rect[2] - tape.rect[0] - s[0]) < 0.01, "width grew to match");
+  const b = tapeBtn(doc, tape).rect;
+  assert.ok(b[0] > tape.rect[0] && b[2] < tape.rect[2] && b[3] > tape.rect[1] && b[1] < tape.rect[3], "button resized with it");
+  assert.strictEqual(JSON.parse(doc.info.ARTRegister).items[tape.name].fs, tape.textSize, "size remembered for Repair");
+  // Nothing more happens on later ticks.
+  const r2 = tape.rect.slice(); env.runIntervals(3);
+  assert.deepStrictEqual(tape.rect, r2);
+});
+
+test("moving a tape moves its double-click button; deleting it removes the button", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  const tape = makeTape(env, doc, { ents: "1\n2" }, 50, 700);
+  const r0 = tape.rect.slice();
+  tape.rect = [r0[0] + 200, r0[1] - 300, r0[2] + 200, r0[3] - 300];
+  env.runIntervals(1);
+  assert.strictEqual(tape.textSize, 8, "text size unchanged");
+  const b = tapeBtn(doc, tape).rect;
+  assert.ok(b[0] > 250 && b[1] < 400, "button moved with the tape: " + b);
+  tape.destroy();                                     // Delete key
+  env.runIntervals(1);
+  assert.strictEqual(tapeBtn(doc, tape), undefined);
+  // A tape deleted while another page was showing: Repair Tags tidies its button.
+  const t2 = makeTape(env, doc, { ents: "3" }, 50, 300);
+  doc.pageNum = 0; t2.destroy();
+  env.alertAnswers.push(3, 4);                        // forget it, OK
+  env.ART.run("repairTags", doc);
+  assert.strictEqual(doc.fieldNames().length, 0);
+});
+
+test("clicking on a tape while placing a reference places the tag there", () => {
+  const env = makeEnv(); const doc = new env.Doc(2);
+  const tape = makeTape(env, doc, { ents: "1\n2\n3\n4" }, 50, 700);
+  env.ART.run("placeTag", doc);
+  const b = tapeBtn(doc, tape);
+  doc.press(b.name, 70, 660);
+  const tag = doc._annots.find(a => a.name === "ART:T:A-1:1");
+  assert.ok(tag && tag.rect[0] < 70 && tag.rect[2] > 70, "tag placed where clicked");
+  assert.strictEqual(doc.calc("entr"), null, "calculator didn't open");
+  env.ART.run("placeTag", doc);
 });
 
 test("tapes from combined files are adopted into the register", () => {
@@ -526,7 +930,7 @@ test("repair restores tags and tapes lost to Acrobat's own Replace Pages", () =>
   const env = makeEnv(); const doc = new env.Doc(10);
   refPairs(env, doc, [[0, 200, 300], [6, 220, 330]]);
   doc.pageNum = 6;
-  env.dialogResults.push({ titl: "t", ents: "1\n2", init: "" }); env.ART.run("calcTape", doc); doc.click(50, 500);
+  makeTape(env, doc, { titl: "t", ents: "1\n2" }, 50, 500);
   const before = doc._annots.map(a => ({ n: a.name, r: a.rect.slice(), p: a.page, c: a.contents }));
   // Native replace of page 6 wipes everything on it
   doc.replacePages({ nPage: 6 });
@@ -544,7 +948,7 @@ test("repair restores tags and tapes lost to Acrobat's own Replace Pages", () =>
 
 test("repair 'No' forgets deleted items instead of restoring", () => {
   const env = makeEnv(); const doc = new env.Doc(3);
-  env.dialogResults.push({ titl: "t", ents: "1", init: "" }); env.ART.run("calcTape", doc); doc.click(50, 500);
+  makeTape(env, doc, { titl: "t", ents: "1" }, 50, 500);
   doc._annots[0].destroy();
   env.alertAnswers.push(3, 4);
   env.ART.run("repairTags", doc);
@@ -564,7 +968,7 @@ test("Replace Page (Keep Tags) keeps tags, tapes and optionally other comments",
   const env = makeEnv(); const doc = new env.Doc(10);
   refPairs(env, doc, [[0, 100, 100], [3, 120, 140]], { next: "C-1" });
   doc.pageNum = 3;
-  env.dialogResults.push({ titl: "t", ents: "1\n2", init: "" }); env.ART.run("calcTape", doc); doc.click(300, 600);
+  makeTape(env, doc, { titl: "t", ents: "1\n2" }, 300, 600);
   doc.addAnnot({ type: "Text", page: 3, rect: [10, 10, 30, 30], name: "reviewnote", contents: "Please update" });
   const before = names(doc);
   env.alertAnswers.push(4 /*replace?*/, 4 /*carry others*/, 4 /*done*/);

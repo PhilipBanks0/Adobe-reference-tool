@@ -66,11 +66,21 @@ var ART_privLaunchURL = app.trustedFunction(function (url) {
     app.endPriv();
 });
 
+// The open PDFs, for the tape watcher (needs privilege to see them all).
+var ART_privActiveDocs = app.trustedFunction(function () {
+    app.beginPriv();
+    var d = app.activeDocs;
+    app.endPriv();
+    return d;
+});
+
 var ART_timer = null;
-var ART_followTimer = null; // reference mode: follows the page being viewed
+var ART_followTimer = null; // reference mode / calculator: follows the page being viewed
+var ART_laterTimer = null;  // runs work just after a button or keystroke event has finished
+var ART_watchTimer = null;  // tape watcher
 
 var ARTool = (function () {
-    var VERSION = "0.3.10";
+    var VERSION = "0.4.0";
     var REPO = "PhilipBanks0/Adobe-reference-tool";
     var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
     var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -160,7 +170,8 @@ var ARTool = (function () {
         var s = String(tok).replace(/[\s$,]/g, "");
         var neg = false;
         var pct = false;
-        if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1); }
+        if (s.charAt(0) === "-") { neg = !neg; s = s.slice(1); }
+        if (/^\(.*\)$/.test(s)) { neg = !neg; s = s.slice(1, -1); }
         if (s.charAt(0) === "-") { neg = !neg; s = s.slice(1); }
         if (s.charAt(s.length - 1) === "%") { pct = true; s = s.slice(0, -1); }
         if (!/^(\d+\.?\d*|\.\d+)$/.test(s)) { return null; }
@@ -169,11 +180,64 @@ var ARTool = (function () {
         return neg ? -v : v;
     }
 
+    /** A number as typed on the tape: 1,250 / 1.05 / 0.05 (no forced decimals). */
+    function fmtNum(v) {
+        var neg = v < 0;
+        var s = String(Math.round(Math.abs(v) * 1e6) / 1e6);
+        if (/e/i.test(s)) { s = Math.abs(v).toFixed(6).replace(/\.?0+$/, ""); }
+        var parts = s.split(".");
+        var i = parts[0];
+        var out = "";
+        while (i.length > 3) { out = "," + i.slice(-3) + out; i = i.slice(0, -3); }
+        return (neg ? "-" : "") + i + out + (parts[1] ? "." + parts[1] : "");
+    }
+
+    // One amount: 1,250.00  (800)  -800  $12  5%  .5
+    var AMT = "-?\\(?\\$?\\s*(?:\\d[\\d,]*\\.?\\d*|\\.\\d+)\\)?%?";
+    // Multiply / divide: x * / and the × ÷ signs
+    var MULOP = "[xX*\\/\\u00d7\\u00f7]";
+    var EMPTY_TAPE = "Enter at least one amount.";
+
+    function normMul(op) { return (op === "/" || op === "÷") ? "/" : "*"; }
+
+    /**
+     * Read "250 x 12 Rent" -> factors [250, x12] and the description "Rent".
+     * Returns null when the text doesn't start with an amount.
+     */
+    function parseExpr(text) {
+        var s = String(text);
+        var m = s.match(new RegExp("^\\s*(" + AMT + ")"));
+        var v = m ? parseAmount(m[1]) : null;
+        if (v === null) { return null; }
+        var factors = [{ op: "*", value: v }];
+        var rest = s.slice(m[0].length);
+        var step = new RegExp("^\\s*(" + MULOP + ")\\s*(" + AMT + ")");
+        while (true) {
+            var k = rest.match(step);
+            var fv = k ? parseAmount(k[2]) : null;
+            if (fv === null) { break; }
+            factors.push({ op: normMul(k[1]), value: fv });
+            rest = rest.slice(k[0].length);
+        }
+        return { factors: factors, rest: trim(rest) };
+    }
+
+    function exprText(factors) {
+        var out = "";
+        for (var i = 0; i < factors.length; i++) {
+            if (i) { out += factors[i].op === "/" ? " / " : " x "; }
+            out += fmtNum(factors[i].value);
+        }
+        return out;
+    }
+
     /**
      * Parse tape entries, one per line:
-     *   [op] amount [description]
+     *   [op] amount [x amount ...] [description]
      * op is one of + - * x / (default +). "=" or "sub" on its own line
-     * inserts a subtotal. Returns {rows, total, errors}.
+     * inserts a subtotal. "250 x 12 Rent" adds 3,000 (like an adding
+     * machine); a line that starts with x or / multiplies or divides the
+     * running total. Returns {rows, total, errors}.
      */
     function computeTape(text) {
         var lines = String(text || "").split(/\r\n|\r|\n/);
@@ -190,20 +254,30 @@ var ARTool = (function () {
                 continue;
             }
             var op = "+";
-            var m = line.match(/^([+\-*\/xX×÷])(?=[\s\d.($])\s*(.*)$/);
+            var m = line.match(/^([+\-*\/xX×÷])(?=[\s\d.($-])\s*(.*)$/);
             if (m) {
                 op = m[1];
                 if (op === "x" || op === "X" || op === "×") { op = "*"; }
                 if (op === "÷") { op = "/"; }
                 line = m[2];
             }
-            var nm = line.match(/^(\(?\$?\s*(?:[\d,]*\.?\d+)\)?%?)\s*(.*)$/);
-            var val = nm ? parseAmount(nm[1]) : null;
-            if (val === null) {
+            var ex = parseExpr(line);
+            if (!ex) {
                 errors.push("Line " + (i + 1) + ": can't read an amount in \"" + trim(lines[i]) + "\"");
                 continue;
             }
-            var desc = nm[2] ? trim(nm[2]) : "";
+            var val = ex.factors[0].value;
+            var zero = false;
+            for (var f = 1; f < ex.factors.length; f++) {
+                if (ex.factors[f].op === "/") {
+                    if (ex.factors[f].value === 0) { zero = true; break; }
+                    val /= ex.factors[f].value;
+                } else {
+                    val *= ex.factors[f].value;
+                }
+            }
+            if (zero) { errors.push("Line " + (i + 1) + ": divide by zero"); continue; }
+            val = Math.round(val * 1e6) / 1e6;
             if (!started && (op === "*" || op === "/")) {
                 errors.push("Line " + (i + 1) + ": the first entry can't be a multiply or divide");
                 continue;
@@ -218,10 +292,19 @@ var ARTool = (function () {
             started = true;
             // round away floating point noise
             total = Math.round(total * 1e6) / 1e6;
-            rows.push({ op: op, value: val, desc: desc });
+            var row = { op: op, value: val, desc: ex.rest };
+            if (ex.factors.length > 1) { row.expr = ex.factors; }
+            rows.push(row);
         }
-        if (!rows.length && !errors.length) { errors.push("Enter at least one amount."); }
+        if (!rows.length && !errors.length) { errors.push(EMPTY_TAPE); }
         return { rows: rows, total: total, errors: errors };
+    }
+
+    /** Errors other than "the tape is empty". */
+    function realErrors(calc) {
+        var out = [];
+        for (var i = 0; i < calc.errors.length; i++) { if (calc.errors[i] !== EMPTY_TAPE) { out.push(calc.errors[i]); } }
+        return out;
     }
 
     /** Render a computed tape as monospaced text. */
@@ -230,7 +313,7 @@ var ARTool = (function () {
         var i;
         for (i = 0; i < calc.rows.length; i++) {
             var r = calc.rows[i];
-            nums.push(r.op === "*" || r.op === "/" ? String(r.value) : fmt(r.value));
+            nums.push(r.op === "*" || r.op === "/" ? fmtNum(r.value) : fmt(r.value));
         }
         var totalStr = fmt(calc.total);
         var w = totalStr.length;
@@ -244,12 +327,84 @@ var ARTool = (function () {
             if (row.op === "=") {
                 out.push(pad(pad("", w - 2).replace(/ /g, "-"), w, true));
             }
-            out.push(pad(nums[i], w, true) + " " + sym + (row.desc ? "  " + row.desc : ""));
+            var desc = row.expr ? exprText(row.expr) + (row.desc ? "  " + row.desc : "") : row.desc;
+            out.push(pad(nums[i], w, true) + " " + sym + (desc ? "  " + desc : ""));
         }
         out.push(pad("", w + 2).replace(/ /g, "="));
         out.push(pad(totalStr, w, true) + " T  Total");
         out.push("Prepared" + (initials ? " by " + trim(initials) : "") + " " + today());
         return out.join("\n");
+    }
+
+    /**
+     * Read a posted tape back into its title, lines and initials, for tapes
+     * whose lines weren't saved in the register (made before 0.4.0, or
+     * carried in from another PDF). Returns null if it isn't a tape.
+     */
+    function parseTapeText(text) {
+        var lines = String(text || "").split(/\r\n|\r|\n/);
+        var head = trim(lines[0] || "").match(/^TAPE(?::\s*(.*))?$/);
+        if (!head) { return null; }
+        var out = { titl: head[1] ? trim(head[1]) : "", ents: "", init: "" };
+        var ents = [];
+        for (var i = 1; i < lines.length; i++) {
+            var line = lines[i];
+            if (/^\s*[-=]+\s*$/.test(line)) { continue; }
+            var prep = trim(line).match(/^Prepared(?: by (.*?))?\s+\d{4}-\d\d-\d\d$/);
+            if (prep) { out.init = prep[1] ? trim(prep[1]) : ""; continue; }
+            var m = line.match(/^\s*(\S+)\s+([+\-x\/ST])(?:\s\s(.*))?$/);
+            if (!m) { continue; }
+            var num = m[1];
+            var sym = m[2];
+            var desc = m[3] ? trim(m[3]) : "";
+            if (sym === "T") { continue; }
+            if (sym === "S") { ents.push(desc && desc !== "Subtotal" ? "= " + desc : "="); continue; }
+            var shown = parseAmount(num);
+            var body = num + (desc ? " " + desc : "");
+            // A multiplication row shows its working in the description: "3,000.00 +  250 x 12  Rent".
+            var ex = desc ? parseExpr(desc) : null;
+            if (ex && ex.factors.length > 1 && shown !== null) {
+                var v = ex.factors[0].value;
+                for (var f = 1; f < ex.factors.length; f++) { v = ex.factors[f].op === "/" ? v / ex.factors[f].value : v * ex.factors[f].value; }
+                var tol = (sym === "+" || sym === "-") ? 0.006 : 1e-6;
+                if (Math.abs(v - shown) < tol) { body = trim(desc.slice(0, desc.length - ex.rest.length)) + (ex.rest ? " " + ex.rest : ""); }
+            }
+            if (sym === "+") { ents.push(body); }
+            else if (sym === "-") { ents.push(/^-/.test(body) ? "- " + body : "-" + body); }
+            else { ents.push(sym + " " + body); }
+        }
+        out.ents = ents.join("\n");
+        return out;
+    }
+
+    /**
+     * What an operator key does in the calculator's Amount box, like an
+     * adding machine. `val` is what's in the box, `key` one of + - * /.
+     *   1,250  +   -> adds 1,250            800  -   -> subtracts 800
+     *   250    *   -> "250 x " (waits for the next number: 250 x 12 is added)
+     *   (empty) * 1.05 +  -> multiplies the running total by 1.05
+     * Returns {line, next} (line to add, if any, and the new box text), or
+     * null when the key should just be typed (e.g. the "/" in "O/S").
+     */
+    function calcKeyAction(val, key) {
+        var s = trim(val);
+        if (!s) { return null; }
+        var mul = (key === "*" || key === "/");
+        var sym = key === "/" ? "/" : "x";
+        // An operation on the running total: "x", "x 1.05", "/ 12"
+        var pm = s.match(new RegExp("^(" + MULOP + ")\\s*(" + AMT + ")?$"));
+        if (pm) {
+            if (!pm[2]) { return mul ? { line: null, next: sym + " " } : null; }
+            return { line: (normMul(pm[1]) === "/" ? "/ " : "x ") + trim(pm[2]), next: mul ? sym + " " : "" };
+        }
+        // An amount, or amounts multiplied together, maybe still waiting for the next number
+        var em = s.match(new RegExp("^(?:\\+\\s*)?(" + AMT + "(?:\\s*" + MULOP + "\\s*" + AMT + ")*)(\\s*" + MULOP + ")?$"));
+        if (!em) { return null; }
+        var expr = trim(em[1]);
+        if (em[2]) { return mul ? { line: null, next: expr + " " + sym + " " } : null; }
+        if (mul) { return { line: null, next: expr + " " + sym + " " }; }
+        if (key === "+") { return { line: expr, next: "" }; }
+        return { line: (expr.charAt(0) === "-" ? "- " : "-") + expr, next: "" };
     }
 
     // -----------------------------------------------------------------------
@@ -336,6 +491,7 @@ var ARTool = (function () {
                 if (m && m[1] === reg.prefix && Number(m[2]) >= reg.next) { reg.next = Number(m[2]) + 1; }
             } else {
                 item.contents = a.contents;
+                if (Number(a.textSize) > 0) { item.fs = Number(a.textSize); }
             }
             reg.items[a.name] = item;
         }
@@ -476,14 +632,152 @@ var ARTool = (function () {
         return a;
     }
 
-    function tapeSize(text) {
-        var lines = String(text).split("\n");
-        var longest = 0;
+    // -----------------------------------------------------------------------
+    // Tapes. A tape is a FreeText comment in Courier. Its font size follows
+    // the box: resize the box and the text is re-fitted so nothing is cut
+    // off. An invisible button over its figures catches a double-click to
+    // edit it; the title line and edges are left clear so the tape can
+    // still be selected, dragged and resized.
+    // -----------------------------------------------------------------------
+    var TBTN = "ART_TBTN";
+    var TAPE_PAD_W = 12;
+    var TAPE_PAD_H = 10;
+    var TAPE_MIN_FS = 4;
+    var TAPE_MAX_FS = 40;
+
+    function tapeMetrics(text) {
+        var lines = String(text).split(/\r\n|\r|\n/);
+        var longest = 1;
         for (var i = 0; i < lines.length; i++) { if (lines[i].length > longest) { longest = lines[i].length; } }
-        return [longest * cfg.tapeFontSize * 0.6 + 12, lines.length * cfg.tapeFontSize * 1.2 + 10];
+        return { cols: longest, rows: lines.length };
     }
 
-    function addTape(doc, reg, page, rect, text, name) {
+    function tapeSize(text, fs) {
+        fs = fs || cfg.tapeFontSize;
+        var m = tapeMetrics(text);
+        return [m.cols * fs * 0.6 + TAPE_PAD_W, m.rows * fs * 1.2 + TAPE_PAD_H];
+    }
+
+    function roundFs(f) {
+        if (!(f > 0)) { f = TAPE_MIN_FS; }
+        f = Math.floor(f * 4 + 1e-6) / 4; // quarter points, never bigger than the box
+        return Math.max(TAPE_MIN_FS, Math.min(TAPE_MAX_FS, f));
+    }
+
+    /**
+     * After the tape's box was resized to W x H: the font size that makes the
+     * text fill it. how = "resized" follows the side dragged furthest (drag
+     * any edge and the whole tape scales); "fit" makes it fit inside the box.
+     * Returns {fs, w, h, changed}.
+     */
+    function refitTape(text, fs0, W, H, how) {
+        fs0 = fs0 || cfg.tapeFontSize;
+        var ideal = tapeSize(text, fs0);
+        if (Math.abs(W - ideal[0]) <= 1 && Math.abs(H - ideal[1]) <= 1) {
+            return { fs: fs0, w: ideal[0], h: ideal[1], changed: false };
+        }
+        var m = tapeMetrics(text);
+        var fw = (W - TAPE_PAD_W) / (m.cols * 0.6);
+        var fh = (H - TAPE_PAD_H) / (m.rows * 1.2);
+        var f;
+        if (how === "resized" && fw > 0 && fh > 0) {
+            f = Math.abs(Math.log(fw / fs0)) >= Math.abs(Math.log(fh / fs0)) ? fw : fh;
+        } else {
+            f = Math.min(fw, fh);
+        }
+        f = roundFs(f);
+        var s = tapeSize(text, f);
+        return { fs: f, w: s[0], h: s[1], changed: true };
+    }
+
+    function tapeFs(a, reg) {
+        var fs = Number(a && a.textSize);
+        if (fs > 0) { return fs; }
+        var it = reg && a && reg.items[a.name];
+        return (it && it.fs) || cfg.tapeFontSize;
+    }
+
+    function setTapeText(a, text, fs) {
+        try { a.textSize = fs; } catch (e0) {}
+        a.contents = text;
+        try {
+            var sp = {};
+            sp.text = text;
+            sp.fontFamily = ["Courier", "monospace"];
+            sp.textSize = fs;
+            sp.textColor = ["RGB", 0, 0, 0];
+            a.richContents = [sp];
+        } catch (e) {}
+    }
+
+    function tapeBtnName(name) { return TBTN + "." + name.slice(TAPE_PREFIX.length); }
+
+    /** The part of a tape the double-click button covers: below the title line, inside the edges. */
+    function tapeBodyRect(r, fs) {
+        var m = 5;
+        var b = [r[0] + m, r[1] + m, r[2] - m, r[3] - TAPE_PAD_H / 2 - fs * 1.2];
+        if (b[2] - b[0] < 4 || b[3] - b[1] < 4) { return null; }
+        return b;
+    }
+
+    function sameBox(a, b) {
+        if (!a || !b) { return false; }
+        var x = [Math.min(a[0], a[2]), Math.min(a[1], a[3]), Math.max(a[0], a[2]), Math.max(a[1], a[3])];
+        var y = [Math.min(b[0], b[2]), Math.min(b[1], b[3]), Math.max(b[0], b[2]), Math.max(b[1], b[3])];
+        for (var i = 0; i < 4; i++) { if (Math.abs(x[i] - y[i]) > 0.5) { return false; } }
+        return true;
+    }
+
+    /** Remove double-click buttons whose tape has gone (deleted with the Delete key, say). */
+    function cleanTapeButtons(doc, present) {
+        var names = fieldNames(doc);
+        for (var i = 0; i < names.length; i++) {
+            if (names[i].indexOf(TBTN + ".") !== 0) { continue; }
+            if (!present[TAPE_PREFIX + names[i].slice(TBTN.length + 1)]) {
+                try { doc.removeField(names[i]); } catch (e) {}
+            }
+        }
+    }
+
+    function removeTapeButton(doc, name) {
+        var nm = tapeBtnName(name);
+        try { if (doc.getField(nm)) { doc.removeField(nm); } } catch (e) {}
+    }
+
+    /** Put the invisible double-click button over a tape's figures, or move it to where the tape is now. */
+    function ensureTapeButton(doc, a, fs) {
+        var nm = tapeBtnName(a.name);
+        var body = tapeBodyRect(copyRect(a.rect), fs || tapeFs(a));
+        var f = null;
+        try { f = doc.getField(nm); } catch (e) {}
+        // Two tapes with the same name (pages inserted from a copy of the work paper) share
+        // one button with a widget on each: leave it be rather than take it off one of them.
+        if (f && typeof f.page === "object") { return false; }
+        if (f && (!body || f.page !== a.page)) { removeTapeButton(doc, a.name); f = null; }
+        if (!body) { return !!f; }
+        var rr = toRotatedRect(doc, a.page, body);
+        var box = [rr[0], rr[3], rr[2], rr[1]]; // upper-left, lower-right
+        if (f) {
+            if (sameBox(f.rect, box)) { return false; }
+            f.rect = box;
+            return true;
+        }
+        f = doc.addField(nm, "button", a.page, box);
+        try { f.borderStyle = border.s; } catch (e1) {}
+        try { f.lineWidth = 0; } catch (e2) {}
+        try { f.strokeColor = color.transparent; } catch (e3) {}
+        try { f.fillColor = color.transparent; } catch (e4) {}
+        try { f.highlight = highlight.n; } catch (e5) {}
+        try { f.display = display.noPrint; } catch (e6) {}
+        try { f.userName = "Double-click to change this tape. Drag it by its title line or edge to move it; drag a corner to resize it."; } catch (e7) {}
+        f.setAction("MouseUp", "if(typeof ARTool!=='undefined'){ARTool._tapeClick(this," + JSON.stringify(a.name) +
+            ",event.target.page,this.mouseX,this.mouseY);}");
+        return true;
+    }
+
+    function addTape(doc, reg, page, rect, text, name, opts) {
+        opts = opts || {};
+        var fs = opts.fs || cfg.tapeFontSize;
         rect = clampRect(doc, page, rect);
         name = name || (TAPE_PREFIX + new Date().getTime().toString(36) + Math.floor(Math.random() * 1e6).toString(36));
         var a = doc.addAnnot({
@@ -498,27 +792,36 @@ var ARTool = (function () {
             strokeColor: cfg.tapeBorder,
             width: 1,
             textFont: "Courier",
-            textSize: cfg.tapeFontSize,
+            textSize: fs,
             alignment: 0
         });
-        try {
-            var sp = {};
-            sp.text = text;
-            sp.fontFamily = ["Courier", "monospace"];
-            sp.textSize = cfg.tapeFontSize;
-            sp.textColor = ["RGB", 0, 0, 0];
-            a.richContents = [sp];
-        } catch (e) {}
+        setTapeText(a, text, fs);
         try { a.print = true; } catch (e2) {}
-        reg.items[a.name] = { kind: "tape", page: page, rect: copyRect(a.rect), contents: text };
+        var item = { kind: "tape", page: page, rect: copyRect(a.rect), contents: text, fs: fs };
+        if (opts.src) { item.src = opts.src; item.made = opts.made || text; }
+        reg.items[a.name] = item;
+        try { ensureTapeButton(doc, a, fs); } catch (e3) {}
+        remember(doc, a);
         return a;
+    }
+
+    /** Change a tape's figures in place: same spot, same text size, box sized to the new text. */
+    function updateTape(doc, reg, a, text, src) {
+        var fs = tapeFs(a, reg);
+        var r = copyRect(a.rect);
+        var s = tapeSize(text, fs);
+        setTapeText(a, text, fs);
+        a.rect = clampRect(doc, a.page, [r[0], r[3] - s[1], r[0] + s[0], r[3]]);
+        reg.items[a.name] = { kind: "tape", page: a.page, rect: copyRect(a.rect), contents: text, fs: fs, src: src, made: text };
+        try { ensureTapeButton(doc, a, fs); } catch (e) {}
+        remember(doc, a);
     }
 
     /** Re-create a tag or tape from its register entry. */
     function restoreItem(doc, reg, name, item, page) {
         var pg = (page === undefined) ? item.page : page;
         if (item.kind === "tag") { return addTag(doc, reg, item.label, item.side, pg, item.rect, item.style); }
-        return addTape(doc, reg, pg, item.rect, item.contents, name);
+        return addTape(doc, reg, pg, item.rect, item.contents, name, { fs: item.fs, src: item.src, made: item.made });
     }
 
     function destroyArt(doc, reg, annot) {
@@ -527,11 +830,169 @@ var ARTool = (function () {
             if (item.linkRect && item.linkPage === annot.page) { removeLinkAt(doc, item.linkPage, item.linkRect); }
             removeLinkAt(doc, annot.page, toRotatedRect(doc, annot.page, annot.rect));
         }
+        var p = parseName(annot.name);
+        if (p && p.kind === "tape") { removeTapeButton(doc, annot.name); }
         // Tags are read-only (so clicks reach the link); Acrobat won't delete a
         // read-only annotation until that's switched off.
         try { annot.readOnly = false; } catch (e1) {}
         try { annot.lock = false; } catch (e2) {}
         annot.destroy();
+    }
+
+    // -----------------------------------------------------------------------
+    // Tape watcher. A light timer looks at the page being viewed in each open
+    // PDF: when a tape's box has been resized it re-fits the text, and it
+    // keeps each tape's double-click button over the tape as it's moved.
+    // -----------------------------------------------------------------------
+    var watch = { docs: [], seen: {}, pages: {}, tidied: {}, busy: false };
+
+    function docKey(doc) {
+        var k = null;
+        try { k = doc.path; } catch (e) {}
+        if (!k) { try { k = doc.documentFileName; } catch (e2) {} }
+        return String(k || "doc");
+    }
+
+    function rememberDoc(doc) {
+        if (!doc) { return; }
+        for (var i = 0; i < watch.docs.length; i++) { if (watch.docs[i] === doc) { return; } }
+        watch.docs.push(doc);
+        if (watch.docs.length > 30) { watch.docs.shift(); }
+    }
+
+    /** Note a tape's box and text as current, so the watcher leaves it alone. */
+    function remember(doc, a) {
+        rememberDoc(doc);
+        watch.seen[docKey(doc) + "|" + a.name] = { r: String(copyRect(a.rect)), c: String(a.contents) };
+    }
+
+    function watchedDocs() {
+        var d = null;
+        try { d = ART_privActiveDocs(); } catch (e) {}
+        if (d && d.length) {
+            for (var i = 0; i < d.length; i++) { rememberDoc(d[i]); }
+        }
+        return watch.docs.slice();
+    }
+
+    function forgetDoc(doc) {
+        for (var i = 0; i < watch.docs.length; i++) {
+            if (watch.docs[i] === doc) { watch.docs.splice(i, 1); return; }
+        }
+    }
+
+    /** Re-fit one tape if its box or text changed, and keep its button on it. Returns true if the register changed. */
+    function watchTape(doc, reg, a) {
+        var key = docKey(doc) + "|" + a.name;
+        var prev = watch.seen[key];
+        var r = copyRect(a.rect);
+        var text = String(a.contents || "");
+        if (prev && prev.r === String(r) && prev.c === text) { return false; }
+        var fs = tapeFs(a, reg);
+        var how = !prev ? "fit" : (prev.c !== text && prev.r === String(r) ? "text" : "resized");
+        var fit;
+        if (how === "text") {
+            // The text was edited: keep the size, grow or shrink the box.
+            var s = tapeSize(text, fs);
+            fit = { fs: fs, w: s[0], h: s[1], changed: Math.abs(s[0] - (r[2] - r[0])) > 1 || Math.abs(s[1] - (r[3] - r[1])) > 1 };
+        } else {
+            fit = refitTape(text, fs, r[2] - r[0], r[3] - r[1], how);
+        }
+        var changed = false;
+        // A protected PDF refuses changes: remember the tape anyway so it isn't retried every tick.
+        if (fit.changed) {
+            try {
+                if (fit.fs !== fs) { setTapeText(a, text, fit.fs); }
+                a.rect = clampRect(doc, a.page, [r[0], r[3] - fit.h, r[0] + fit.w, r[3]]);
+                changed = true;
+            } catch (e) {
+                fit.fs = fs;
+            }
+        }
+        try { if (ensureTapeButton(doc, a, fit.fs)) { changed = true; } } catch (e2) {}
+        var item = reg.items[a.name] || { kind: "tape" };
+        var rect = copyRect(a.rect);
+        if (item.kind !== "tape" || item.page !== a.page || String(item.rect) !== String(rect) ||
+                item.contents !== text || item.fs !== fit.fs) {
+            item.kind = "tape";
+            item.page = a.page;
+            item.rect = rect;
+            item.contents = text;
+            item.fs = fit.fs;
+            reg.items[a.name] = item;
+            changed = true;
+        }
+        remember(doc, a);
+        return changed;
+    }
+
+    /** Once per PDF per session: remove buttons left behind by tapes deleted elsewhere. */
+    function tidyTapeButtons(doc) {
+        var names = fieldNames(doc);
+        var any = false;
+        for (var i = 0; i < names.length && !any; i++) { if (names[i].indexOf(TBTN + ".") === 0) { any = true; } }
+        if (!any) { return false; }
+        var present = {};
+        var all = getAnnots(doc);
+        for (var j = 0; j < all.length; j++) { if (all[j].name) { present[all[j].name] = true; } }
+        var before = fieldNames(doc).length;
+        cleanTapeButtons(doc, present);
+        return fieldNames(doc).length !== before;
+    }
+
+    function watchDoc(doc) {
+        var p = doc.pageNum;
+        var dk = docKey(doc);
+        // Housekeeping (buttons, register) mustn't make an unchanged PDF ask "Save changes?".
+        var wasDirty = null;
+        try { wasDirty = doc.dirty; } catch (e0) {}
+        var tidied = false;
+        if (!watch.tidied[dk]) {
+            watch.tidied[dk] = true;
+            try { tidied = tidyTapeButtons(doc); } catch (e1) {}
+        }
+        var annots = null;
+        try { annots = doc.getAnnots({ nPage: p }); } catch (e) {}
+        annots = annots || [];
+        var here = {};
+        var reg = null;
+        var changed = false;
+        for (var i = 0; i < annots.length; i++) {
+            var a = annots[i];
+            if (!a || !a.name || a.name.indexOf(TAPE_PREFIX) !== 0) { continue; }
+            here[a.name] = true;
+            var prev = watch.seen[dk + "|" + a.name];
+            if (prev && prev.r === String(copyRect(a.rect)) && prev.c === String(a.contents || "")) { continue; }
+            reg = reg || loadReg(doc);
+            if (watchTape(doc, reg, a)) { changed = true; }
+        }
+        // A tape that was on this page a moment ago and is gone (deleted): take its button away too.
+        var last = watch.pages[dk];
+        if (last && last.page === p) {
+            for (var n in last.names) {
+                if (last.names.hasOwnProperty(n) && !here[n]) {
+                    removeTapeButton(doc, n);
+                    delete watch.seen[dk + "|" + n];
+                    tidied = true;
+                }
+            }
+        }
+        watch.pages[dk] = { page: p, names: here };
+        if (changed) { saveReg(doc, reg); }
+        if ((changed || tidied) && wasDirty === false) { try { doc.dirty = false; } catch (e2) {} }
+    }
+
+    function watchTick() {
+        if (watch.busy) { return; }
+        watch.busy = true;
+        try {
+            var docs = watchedDocs();
+            for (var i = 0; i < docs.length; i++) {
+                try { watchDoc(docs[i]); } catch (e) { forgetDoc(docs[i]); } // closed
+            }
+        } finally {
+            watch.busy = false;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -548,6 +1009,7 @@ var ARTool = (function () {
     // -----------------------------------------------------------------------
     var CAP = "ART_CAP";
     var BAR = "ART_BAR";
+    var CALC = "ART_CALC";
 
     function fieldNames(doc) {
         var out = [];
@@ -561,7 +1023,7 @@ var ARTool = (function () {
     function removeCaptureFields(doc) {
         if (!doc) { return; }
         var names = fieldNames(doc);
-        var roots = [CAPTURE_FIELD, CAP, BAR];
+        var roots = [CAPTURE_FIELD, CAP, BAR, CALC];
         for (var i = 0; i < names.length; i++) {
             for (var r = 0; r < roots.length; r++) {
                 if (names[i] === roots[r] || names[i].indexOf(roots[r] + ".") === 0) {
@@ -578,6 +1040,7 @@ var ARTool = (function () {
 
     function cancelCapture(doc) {
         var old = capture;
+        if (old && old.mode === "calc") { stashCalc(old.doc, old.data); }
         capture = null;
         stopFollow();
         removeCaptureFields(doc);
@@ -707,6 +1170,7 @@ var ARTool = (function () {
         if (!c || !c.follow) { stopFollow(); return; }
         var n;
         try { n = c.doc.pageNum; } catch (e) { capture = null; stopFollow(); return; } // document closed
+        if (c.mode === "calc") { calcFollow(c, n); return; }
         if (!coverNear(c, n)) { refreshNear(c, n); }
     }
 
@@ -784,8 +1248,9 @@ var ARTool = (function () {
         ART_timer = app.setTimeOut("ARTool._removeCapture()", 50);
         api._pendingRemoval = doc;
         if (c.mode === "tape") {
+            delete calcStash[docKey(doc)];
             var s = tapeSize(c.data.text);
-            addTape(doc, reg, page, [x, y - s[1], x + s[0], y], c.data.text);
+            addTape(doc, reg, page, [x, y - s[1], x + s[0], y], c.data.text, null, { src: c.data.src });
         } else if (c.mode === "move") {
             var a = findAnnot(doc, c.data.name);
             if (a) {
@@ -1075,6 +1540,7 @@ var ARTool = (function () {
 
     function placeTag(doc) {
         // The same button starts and stops reference mode.
+        if (capture && capture.mode === "calc") { cancelCapture(doc); }
         if (capture) {
             if (capture.mode === "ref") { stopReferenceMode(doc); } else { cancelCapture(doc); }
             return;
@@ -1156,128 +1622,496 @@ var ARTool = (function () {
     // -----------------------------------------------------------------------
     // Commands
     // -----------------------------------------------------------------------
-    /** Preview text and running total for the tape dialog. */
+    /** Preview text and running total for the calculator. */
     function tapePreview(r) {
         var calc = computeTape(r.ents);
         var txt = formatTape(r.titl, calc, r.init);
-        // While typing, a half-finished line isn't an error worth shouting about.
-        if (calc.errors.length) { txt = "Check: " + calc.errors.join("\n") + "\n\n" + txt; }
+        var errs = realErrors(calc);
+        if (errs.length) { txt = "Check: " + errs.join("\n") + "\n\n" + txt; }
         var hasRows = calc.rows.length > 0;
         return { text: hasRows ? txt : "", total: hasRows ? trim(fmt(calc.total)) : "" };
     }
 
-    function tapeDialog(prefill) {
-        var result = null;
-        function refresh(d, r) {
-            var p = tapePreview(r || d.store());
-            d.load({ prev: p.text, totl: p.total });
-        }
-        /**
-         * Enter in the one-line box presses the dialog's default button, so
-         * "validate" is where a typed line gets added to the tape. Returning
-         * false keeps the dialog open for the next number.
-         */
-        function addLine(d) {
-            var r = d.store();
-            var line = trim(r.entr || "");
-            if (!line) { return true; }                    // nothing typed: finish
-            var before = computeTape(r.ents).errors.length;
-            var ents = r.ents ? String(r.ents).replace(/[\r\n]+$/, "") + "\n" + line : line;
-            if (computeTape(ents).errors.length > before) {
-                d.load({ prev: "Can't read \"" + line + "\" - type an amount, e.g. 1,250.00 or -800 Rent\n\n" + tapePreview(r).text });
-                try { d.focus("entr"); } catch (e) {}
-                return false;
+    // -----------------------------------------------------------------------
+    // Calc Tape: a calculator made of form fields at the top of the page.
+    // Acrobat's pop-up dialogs can't see single key presses, but a form
+    // field can, so + - * / act the moment they're pressed, like a 10-key
+    // adding machine. The panel follows the page being viewed. Double-
+    // clicking a tape opens it here to change it.
+    // -----------------------------------------------------------------------
+    var CALC_W = 340;
+    var CALC_COLORS = {
+        panel: ["RGB", 0.9, 0.93, 0.98],
+        input: ["RGB", 1, 1, 1],
+        status: ["RGB", 1, 0.97, 0.8],
+        button: ["RGB", 0.8, 0.87, 0.97],
+        place: ["RGB", 0.8, 0.93, 0.8],
+        line: ["RGB", 0.2, 0.35, 0.6]
+    };
+    var CALC_HELP = "Amount, then  +  adds it,  -  subtracts it.    *  or  /  : times or divided by the next number.\n" +
+        "Enter adds the line (use Enter after a description, e.g. 800 O/S cheque).    =  then Enter: subtotal";
+    var DOUBLE_CLICK_MS = 600;
+    var PREVIEW_LINES = 17;
+
+    function calcRows(editing) {
+        return [
+            { h: 18, cells: [["info", 230, "status"], ["undo", 58, "button", "Undo line", "Take the last line off the tape"], ["move", 52, "button", "Move", "Move the calculator to another corner of the page"]] },
+            { h: 17, cells: [["l_titl", 34, "label", "Title"], ["titl", 196, "text", "Title printed at the top of the tape"], ["l_init", 50, "label", "Initials"], ["init", 60, "text", "Your initials, printed under the total"]] },
+            { h: 22, cells: [["l_entr", 50, "label", "Amount"], ["entr", 290, "entry", "Type an amount, then + - * / or Enter"]] },
+            { h: 21, cells: [["help", 340, "help"]] },
+            { h: 150, cells: [["ents", 140, "lines", "The tape's lines. You can change them here; the tape updates when you click out of this box."], ["prev", 200, "preview"]] },
+            { h: 22, cells: [["l_totl", 40, "label", "Total"], ["totl", 110, "total"],
+                ["place", 120, "button", editing ? "Update tape" : "Place on page", editing ? "Save the changes to the tape" : "Then click where the tape should go"],
+                ["cancel", 70, "button", "Cancel", "Close the calculator without changing anything"]] }
+        ];
+    }
+
+    /** Where each part of the panel goes on page p: {id: [left, top, right, bottom]} in rotated space. */
+    function calcLayout(doc, p, corner, editing) {
+        var rows = calcRows(editing);
+        var H = 0;
+        var i;
+        for (i = 0; i < rows.length; i++) { H += rows[i].h; }
+        var b = doc.getPageBox("Crop", p);
+        var left = Math.min(b[0], b[2]);
+        var right = Math.max(b[0], b[2]);
+        var top = Math.max(b[1], b[3]);
+        var bottom = Math.min(b[1], b[3]);
+        var x0 = (corner === 2 || corner === 3) ? left + 6 : right - 6 - CALC_W;
+        var y0 = (corner === 1 || corner === 2) ? bottom + 4 + H : top - 4;
+        x0 = Math.max(left, x0);
+        var out = [];
+        var y = y0;
+        for (i = 0; i < rows.length; i++) {
+            var x = x0;
+            for (var j = 0; j < rows[i].cells.length; j++) {
+                var cell = rows[i].cells[j];
+                out.push({ id: cell[0], kind: cell[2], caption: cell[3], tip: cell[4], rect: [x, y, x + cell[1], y - rows[i].h] });
+                x += cell[1];
             }
-            r.ents = ents;
-            d.load({ ents: ents, entr: "" });
-            refresh(d, r);
-            try { d.focus("entr"); } catch (e2) {}
+            y -= rows[i].h;
+        }
+        return out;
+    }
+
+    function calcField(c, id) {
+        try { return c.doc.getField(CALC + "." + id); } catch (e) { return null; }
+    }
+
+    function setCalcValue(c, id, v) {
+        var f = calcField(c, id);
+        if (f && String(f.value) !== String(v)) { try { f.value = v; } catch (e) {} }
+    }
+
+    function styleCalc(f, fill, lw) {
+        try { f.borderStyle = border.s; } catch (e) {}
+        try { f.lineWidth = lw; } catch (e1) {}
+        try { f.strokeColor = lw ? CALC_COLORS.line : color.transparent; } catch (e2) {}
+        try { f.fillColor = fill; } catch (e3) {}
+        try { f.display = display.noPrint; } catch (e4) {}
+        try { f.textColor = ["RGB", 0.1, 0.1, 0.1]; } catch (e5) {}
+    }
+
+    function useCourier(f) { try { f.textFont = font.Cour; } catch (e) {} }
+
+    /** Build the panel on c.page. */
+    function renderCalc(c) {
+        var doc = c.doc;
+        var editing = !!c.data.editing;
+        var cells = calcLayout(doc, c.page, getGlobal("ART_calcCorner", 0) % 4, editing);
+        for (var i = 0; i < cells.length; i++) {
+            var cl = cells[i];
+            var name = CALC + "." + cl.id;
+            var f;
+            if (cl.kind === "button") {
+                f = doc.addField(name, "button", c.page, cl.rect);
+                styleCalc(f, cl.id === "place" ? CALC_COLORS.place : CALC_COLORS.button, 1);
+                try { f.textSize = 8; } catch (e) {}
+                try { f.highlight = highlight.p; } catch (e1) {}
+                try { f.buttonSetCaption(cl.caption); } catch (e2) {}
+                f.setAction("MouseUp", "if(typeof ARTool!=='undefined'){ARTool._calcBtn(this,'" + cl.id + "');}");
+            } else {
+                f = doc.addField(name, "text", c.page, cl.rect);
+                var ro = (cl.kind === "label" || cl.kind === "status" || cl.kind === "help" || cl.kind === "preview" || cl.kind === "total");
+                var fill = cl.kind === "status" ? CALC_COLORS.status : (ro && cl.kind !== "preview" ? CALC_COLORS.panel : CALC_COLORS.input);
+                styleCalc(f, fill, (cl.kind === "label" || cl.kind === "help") ? 0 : 1);
+                try { f.textSize = { label: 8, status: 8, help: 6.5, preview: 7, total: 10, entry: 11, lines: 8, text: 9 }[cl.kind]; } catch (e3) {}
+                if (cl.kind === "help" || cl.kind === "preview" || cl.kind === "lines") { try { f.multiline = true; } catch (e4) {} }
+                if (cl.kind === "preview" || cl.kind === "lines") { useCourier(f); }
+                if (cl.kind === "total" || cl.kind === "label") { try { f.alignment = cl.kind === "total" ? "right" : "left"; } catch (e5) {} }
+                try { f.doNotSpellCheck = true; } catch (e6) {}
+                if (ro) {
+                    try { f.readonly = true; } catch (e7) {}
+                } else if (cl.kind === "entry") {
+                    f.setAction("Keystroke", "if(typeof ARTool!=='undefined'){ARTool._calcKey(this,event);}");
+                    f.setAction("OnFocus", "if(typeof ARTool!=='undefined'){ARTool._calcFocus(this,true);}");
+                    f.setAction("OnBlur", "if(typeof ARTool!=='undefined'){ARTool._calcFocus(this,false);}");
+                } else {
+                    f.setAction("Keystroke", "if(typeof ARTool!=='undefined'){ARTool._calcEdit(this,event,'" + cl.id + "');}");
+                }
+                if (cl.kind === "label") { try { f.value = cl.caption; } catch (e8) {} }
+                if (cl.kind === "help") { try { f.value = CALC_HELP; } catch (e9) {} }
+            }
+            if (cl.tip) { try { f.userName = cl.tip; } catch (e10) {} }
+        }
+        refreshCalc(c);
+    }
+
+    function calcStatusDefault(c) {
+        return c.data.editing ? "Editing this tape: change it, then click Update tape" : "Calc Tape: type an amount, then + - * / or Enter";
+    }
+
+    /** Show the latest tape, total and message. skip = the field being edited right now (leave it alone). */
+    function refreshCalc(c, skip) {
+        var d = c.data;
+        var p = tapePreview(d);
+        var lines = p.text ? p.text.split("\n") : [];
+        if (lines.length > PREVIEW_LINES) { lines = ["..."].concat(lines.slice(lines.length - PREVIEW_LINES + 1)); }
+        var vals = { info: d.status || calcStatusDefault(c), titl: d.titl || "", init: d.init || "", entr: d.entr || "",
+            ents: d.ents || "", prev: lines.join("\n"), totl: p.total };
+        for (var k in vals) {
+            if (vals.hasOwnProperty(k) && k !== skip) { setCalcValue(c, k, vals[k]); }
+        }
+    }
+
+    function focusEntry(c) {
+        var f = calcField(c, "entr");
+        if (f) { try { f.setFocus(); } catch (e) {} }
+    }
+
+    /** Run work just after the current button click or keystroke has finished. */
+    var laterQueue = [];
+    function later(fn) {
+        laterQueue.push(fn);
+        try {
+            ART_laterTimer = app.setTimeOut("ARTool._runLater()", 30);
+        } catch (e) {
+            runLater();
+        }
+    }
+
+    function runLater() {
+        var q = laterQueue;
+        laterQueue = [];
+        for (var i = 0; i < q.length; i++) {
+            try { q[i](); } catch (e) { showError("Calc Tape", e); }
+        }
+    }
+
+    function isCalc(c, doc) { return !!(c && c.mode === "calc" && c.doc === doc); }
+
+    /**
+     * A calculation interrupted by another command (or a tape waiting to be
+     * placed) is kept, so the next Calc Tape picks it up instead of losing it.
+     */
+    var calcStash = {};
+    function stashCalc(doc, d) {
+        if (!doc || !d || !(trim(d.ents || "") || trim(d.entr || ""))) { return; }
+        calcStash[docKey(doc)] = { titl: d.titl || "", ents: d.ents || "", entr: d.entr || "", init: d.init || "", editing: d.editing || null };
+    }
+
+    function startCalc(doc, data, page) {
+        cancelCapture(doc);
+        data.entr = data.entr || "";
+        data.status = data.status || "";
+        var c = { doc: doc, mode: "calc", page: page, data: data, follow: false, pages: {}, want: null, focused: true };
+        capture = c;
+        renderCalc(c);
+        try {
+            ART_followTimer = app.setInterval("ARTool._followPage()", FOLLOW_MS);
+            c.follow = true;
+        } catch (e) {}
+        tip("calcpad",
+            "The calculator is at the top of the page, and it follows you from page to page.\n\n" +
+            "Type an amount and press + to add it or - to subtract it. * or / multiplies or divides by the next number " +
+            "(250 * 12 adds 3,000). Press Enter to add a line with a description, e.g. 800 O/S cheque.\n\n" +
+            "Click Place on page when you're done, then click where the tape goes. Double-click a tape later to change it.");
+        later(function () { if (capture === c) { focusEntry(c); } });
+    }
+
+    /** The panel follows the page being viewed (once the user has stayed there a moment). */
+    function calcFollow(c, n) {
+        if (n === c.page) { c.want = null; return; }
+        if (!c.want || c.want.page !== n) { c.want = { page: n, ticks: 1 }; return; }
+        c.want.ticks++;
+        if (c.want.ticks < 2) { return; }
+        c.want = null;
+        moveCalc(c, n);
+    }
+
+    function moveCalc(c, n, focus) {
+        // If the cursor was in the Amount box, put it back there on the new page.
+        var refocus = focus || c.focused;
+        removeCaptureFields(c.doc);
+        c.page = n;
+        renderCalc(c);
+        if (refocus) { later(function () { if (capture === c) { focusEntry(c); } }); }
+    }
+
+    /** Add one line to the tape if it can be read. Shows what happened in the status line. */
+    function addCalcLine(c, line) {
+        var d = c.data;
+        var base = d.ents ? String(d.ents).replace(/[\r\n\s]+$/, "") : "";
+        var ents = base ? base + "\n" + line : line;
+        var before = realErrors(computeTape(base)).length;
+        var calc = computeTape(ents);
+        if (realErrors(calc).length > before) {
+            var errs = realErrors(calc);
+            d.status = /multiply or divide/.test(errs[errs.length - 1]) ?
+                "Start with an amount; * and / work on the total so far" :
+                "Can't read \"" + line + "\": type an amount, e.g. 1,250.00 or 800 O/S cheque";
             return false;
         }
-        var dlg = {
-            initialize: function (d) {
-                d.load({ titl: prefill.titl, ents: prefill.ents, entr: "", init: prefill.init, prev: "", totl: "" });
-                refresh(d);
-                try { d.focus("entr"); } catch (e) {}
-            },
-            // Acrobat runs these when you leave a box (e.g. after editing the tape lines).
-            ents: function (d) { refresh(d); },
-            titl: function (d) { refresh(d); },
-            init: function (d) { refresh(d); },
-            prvw: function (d) { refresh(d); },
-            addl: function (d) { addLine(d); },
-            validate: function (d) { return addLine(d); },
-            commit: function (d) { result = d.store(); },
-            description: {
-                name: "Calculator Tape",
-                elements: [{
-                    type: "view",
-                    align_children: "align_row",
-                    elements: [
-                        {
-                            type: "view",
-                            align_children: "align_left",
-                            elements: [
-                                { type: "static_text", name: "Title:" },
-                                { type: "edit_text", item_id: "titl", width: 300 },
-                                { type: "static_text", name: "Type an amount and press Enter  (e.g.  -800 O/S cheque,  x 1.05,  = subtotal):" },
-                                {
-                                    type: "view",
-                                    align_children: "align_row",
-                                    elements: [
-                                        { type: "edit_text", item_id: "entr", width: 230 },
-                                        { type: "button", item_id: "addl", name: "Add" }
-                                    ]
-                                },
-                                { type: "static_text", name: "Tape lines (you can edit these too):" },
-                                { type: "edit_text", item_id: "ents", multiline: true, width: 300, height: 190 },
-                                {
-                                    type: "view",
-                                    align_children: "align_row",
-                                    elements: [
-                                        { type: "static_text", name: "Initials:" },
-                                        { type: "edit_text", item_id: "init", width: 60 },
-                                        { type: "static_text", name: "   Total:" },
-                                        { type: "edit_text", item_id: "totl", readonly: true, width: 110 }
-                                    ]
-                                },
-                                { type: "button", item_id: "prvw", name: "Refresh preview" }
-                            ]
-                        },
-                        {
-                            type: "view",
-                            align_children: "align_left",
-                            elements: [
-                                { type: "static_text", name: "Tape:" },
-                                { type: "edit_text", item_id: "prev", multiline: true, readonly: true, width: 320, height: 330 }
-                            ]
-                        }
-                    ]
-                }, { type: "ok_cancel", ok_name: "Place on page" }]
+        d.ents = ents;
+        d.status = "Added " + line + "     Total " + trim(fmt(calc.total));
+        return true;
+    }
+
+    /** Enter in the Amount box: add what's there as a line. */
+    function calcEnter(c, text) {
+        var s = trim(text);
+        if (!s) { return true; }
+        if (new RegExp("^(?:" + MULOP + "|.*\\s*" + MULOP + ")$").test(s) && !/[A-Za-z]{2}/.test(s)) {
+            c.data.status = "Type the number after " + s.slice(-1) + ", then press Enter";
+            return false;
+        }
+        return addCalcLine(c, s);
+    }
+
+    /** Keystrokes in the Amount box. */
+    function calcKey(doc, ev) {
+        rememberDoc(doc);
+        var c = capture;
+        if (!isCalc(c, doc)) {
+            if (!(c && c.doc === doc)) { later(function () { if (!capture) { removeCaptureFields(doc); } }); }
+            return;
+        }
+        var d = c.data;
+        if (ev.willCommit) {
+            d.entr = String(ev.value || "");
+            if (ev.commitKey === 2) {                 // Enter
+                if (trim(d.entr) && calcEnter(c, d.entr)) { d.entr = ""; }
+                later(function () { if (capture === c) { refreshCalc(c); focusEntry(c); } });
             }
-        };
-        var btn = app.execDialog(dlg);
-        return btn === "ok" ? result : null;
+            return;
+        }
+        var val = String(ev.value || "");
+        var ch = String(ev.change || "");
+        var ss = Number(ev.selStart);
+        var se = Number(ev.selEnd);
+        if (!(ss >= 0)) { ss = val.length; }
+        if (!(se >= ss)) { se = ss; }
+        var act = null;
+        // Only at the end of what's typed, so "O/S" or "Year-end" type normally. With the whole
+        // amount highlighted, + * / still act on it, but - starts a negative number in its place.
+        if (ch.length === 1 && "+-*/".indexOf(ch) >= 0 && se === val.length && (ss === se || (ss === 0 && ch !== "-"))) {
+            act = calcKeyAction(val, ch);
+        }
+        if (act && act.line && !addCalcLine(c, act.line)) {
+            ev.rc = false;                            // couldn't read it: leave the box as it is
+            refreshCalc(c, "entr");
+            return;
+        }
+        if (act) {
+            ev.selStart = 0;
+            ev.selEnd = val.length;
+            ev.change = act.next;
+            d.entr = act.next;
+            if (!act.line) { d.status = trim(act.next) + " ...  type the next number"; }
+            refreshCalc(c, "entr");
+            return;
+        }
+        d.entr = val.slice(0, ss) + ch + val.slice(se);
+    }
+
+    /** Title, Initials and the tape lines: keep up with typing; refresh the tape when the box is left. */
+    function calcEdit(doc, ev, id) {
+        var c = capture;
+        if (!isCalc(c, doc)) { return; }
+        var d = c.data;
+        if (ev.willCommit) {
+            d[id] = String(ev.value || "");
+            if (id === "ents") { d.status = ""; }
+            refreshCalc(c, id);
+            if (ev.commitKey === 2 && id !== "ents") { later(function () { if (capture === c) { focusEntry(c); } }); }
+            return;
+        }
+        var val = String(ev.value || "");
+        var ss = Number(ev.selStart);
+        var se = Number(ev.selEnd);
+        if (!(ss >= 0)) { ss = val.length; }
+        if (!(se >= ss)) { se = ss; }
+        d[id] = val.slice(0, ss) + String(ev.change || "") + val.slice(se);
+    }
+
+    function endCalc(c) {
+        if (capture === c) { capture = null; }
+        stopFollow();
+        var doc = c.doc;
+        later(function () { if (!capture || capture.doc !== doc) { removeCaptureFields(doc); } });
+    }
+
+    function calcPlace(c) {
+        var d = c.data;
+        var doc = c.doc;
+        // A number still in the Amount box goes on the tape too (a lone "x" waiting for its number doesn't).
+        if (trim(d.entr) && !new RegExp("^" + MULOP + "$").test(trim(d.entr))) {
+            if (!calcEnter(c, d.entr)) { refreshCalc(c); return; }
+        }
+        d.entr = "";
+        var calc = computeTape(d.ents);
+        if (calc.errors.length) {
+            d.status = calc.errors[0] === EMPTY_TAPE ? "Type at least one amount first" : "Fix the lines: " + calc.errors[0];
+            refreshCalc(c);
+            return;
+        }
+        setGlobal("ART_initials", d.init || "");
+        var text = formatTape(d.titl, calc, d.init);
+        var src = { titl: trim(d.titl || ""), ents: String(d.ents).replace(/\r\n|\r/g, "\n"), init: trim(d.init || "") };
+        endCalc(c);
+        stashCalc(doc, d);                          // until the tape is on the page
+        if (d.editing) {
+            var a = findTape(doc, d.editing, d.editPage);
+            if (a) {
+                delete calcStash[docKey(doc)];
+                var reg = loadReg(doc);
+                sync(doc, reg);
+                updateTape(doc, reg, a, text, src);
+                saveReg(doc, reg);
+                return;
+            }
+            // The tape was deleted meanwhile: place it as a new one.
+        }
+        later(function () {
+            startCapture(doc, "tape", { text: text, src: src }, "tape",
+                "Click where the top-left corner of the tape should go.\n\n" +
+                "Afterwards: drag the tape by its title line or edge to move it, drag a corner to resize it, " +
+                "and double-click its figures to change them.");
+        });
+    }
+
+    function calcButton(doc, id) {
+        rememberDoc(doc);
+        var c = capture;
+        if (!isCalc(c, doc)) {
+            if (!(c && c.doc === doc)) { later(function () { if (!capture) { removeCaptureFields(doc); } }); }
+            return;
+        }
+        var d = c.data;
+        if (id === "place") { calcPlace(c); return; }
+        if (id === "cancel") { delete calcStash[docKey(doc)]; endCalc(c); return; }
+        if (id === "undo") {
+            var lines = String(d.ents || "").replace(/[\r\n\s]+$/, "").split(/\r\n|\r|\n/);
+            var gone = lines.pop();
+            d.ents = lines.join("\n");
+            d.status = gone ? "Took off " + trim(gone) : "The tape is empty";
+            refreshCalc(c);
+            later(function () { if (capture === c) { focusEntry(c); } });
+            return;
+        }
+        if (id === "move") {
+            setGlobal("ART_calcCorner", (getGlobal("ART_calcCorner", 0) + 1) % 4);
+            later(function () { if (capture === c) { moveCalc(c, c.page, true); } });
+        }
+    }
+
+    function selectedTape(doc) {
+        var sel = null;
+        try { sel = doc.selectedAnnots; } catch (e) {}
+        if (!sel || sel.length !== 1) { return null; }
+        var p = parseName(sel[0].name);
+        return p && p.kind === "tape" ? sel[0] : null;
+    }
+
+    function sameText(a, b) {
+        function n(t) { return trim(String(t || "").replace(/\r\n|\r/g, "\n")); }
+        return n(a) === n(b);
+    }
+
+    /** The tape called `name`, preferring the one on `page` (a copied page can repeat a name). */
+    function findTape(doc, name, page) {
+        if (page !== undefined && page !== null) {
+            var here = getAnnots(doc, page);
+            for (var i = 0; i < here.length; i++) { if (here[i].name === name) { return here[i]; } }
+        }
+        return findAnnot(doc, name);
+    }
+
+    /** Open the calculator on an existing tape, filled in with its lines. */
+    function editTape(doc, name, page) {
+        var c = capture;
+        if (isCalc(c, doc)) {
+            if (c.data.editing !== name) {
+                c.data.status = "Finish this one first: click " + (c.data.editing ? "Update tape" : "Place on page") + " or Cancel";
+                refreshCalc(c);
+            }
+            later(function () { if (capture === c) { focusEntry(c); } });
+            return;
+        }
+        var a = findTape(doc, name, page);
+        if (!a) {
+            later(function () { removeTapeButton(doc, name); });
+            return;
+        }
+        var reg = loadReg(doc);
+        var item = reg.items[name] || {};
+        // The saved lines, unless the tape's text was changed directly since (then read the tape itself).
+        var src = (item.src && sameText(item.made, a.contents)) ? item.src : null;
+        src = src || parseTapeText(a.contents) || { titl: "", ents: "", init: "" };
+        startCalc(doc, { titl: src.titl || "", ents: src.ents || "", init: src.init || "", editing: name, editPage: a.page }, a.page);
+    }
+
+    /** Follow a reference tag's link by hand (for a tag that sits on a tape's figures). */
+    function jumpToMatch(doc, tag) {
+        var p = parseName(tag.name);
+        var other = findAnnot(doc, tagName(p.label, p.side === 1 ? 2 : 1));
+        if (!other) { app.alert("The matching tag " + p.label + " was not found in this document.", 1); return; }
+        doc.pageNum = other.page;
+        try { doc.scroll(other.rect[0] - 72, other.rect[3] + 72); } catch (e) {}
+    }
+
+    /** A click on a tape's double-click button. */
+    var lastTapeClick = null;
+    function tapeClick(doc, name, page, mx, my) {
+        rememberDoc(doc);
+        // A button shared by two same-named tapes reports all its pages: use the one being viewed.
+        page = (typeof page === "number") ? page : doc.pageNum;
+        var c = capture;
+        if (c && c.doc === doc && c.mode !== "calc") {
+            // Placing something: this click is for that, as if the tape weren't there.
+            onCapture(doc, Number(page), mx, my);
+            return;
+        }
+        // A reference tag on the tape's figures: the click is for its link.
+        var pt = clickPoint(doc, Number(page), mx, my);
+        var tag = tagAt(doc, Number(page), pt[0], pt[1]);
+        if (tag) { lastTapeClick = null; jumpToMatch(doc, tag); return; }
+        var t = new Date().getTime();
+        var last = lastTapeClick;
+        lastTapeClick = { name: name, t: t };
+        if (!last || last.name !== name || t - last.t > DOUBLE_CLICK_MS) { return; }
+        lastTapeClick = null;
+        editTape(doc, name, Number(page));
     }
 
     function calcTape(doc) {
-        if (capture) { cancelCapture(doc); }
-        var prefill = { titl: "", ents: "", init: getGlobal("ART_initials", "") };
-        while (true) {
-            var r = tapeDialog(prefill);
-            if (!r) { return; }
-            prefill = { titl: r.titl, ents: r.ents, init: r.init };
-            var calc = computeTape(r.ents);
-            if (calc.errors.length) {
-                app.alert("Please fix these entries:\n\n" + calc.errors.join("\n"));
-                continue;
-            }
-            setGlobal("ART_initials", r.init || "");
-            var text = formatTape(r.titl, calc, r.init);
-            startCapture(doc, "tape", { text: text }, "tape",
-                "Click where the top-left corner of the tape should go.\n\nYou can drag the tape afterwards.");
+        var c = capture;
+        if (isCalc(c, doc)) {
+            // Already open: bring it to this page.
+            if (c.page !== doc.pageNum) { moveCalc(c, doc.pageNum); }
+            later(function () { if (capture === c) { focusEntry(c); } });
             return;
         }
+        var sel = selectedTape(doc);
+        if (sel) { editTape(doc, sel.name, sel.page); return; }
+        var kept = calcStash[docKey(doc)];
+        if (kept) {
+            delete calcStash[docKey(doc)];
+            kept.status = "Picked up where you left off (Cancel clears it)";
+            startCalc(doc, kept, doc.pageNum);
+            return;
+        }
+        startCalc(doc, { titl: "", ents: "", init: getGlobal("ART_initials", ""), editing: null }, doc.pageNum);
     }
 
     function buildReport(doc, reg, present) {
@@ -1395,12 +2229,16 @@ var ARTool = (function () {
                 restored++;
             }
         }
-        // Refresh every link so moved or restored tags are clickable.
+        // Refresh every link so moved or restored tags are clickable, and
+        // make sure every tape (and only a tape) has its double-click button.
         present = sync(doc, reg);
         var linked = 0;
         for (var n in present) {
-            if (present.hasOwnProperty(n) && reg.items[n].kind === "tag") { rebuildLink(doc, present[n], reg); linked++; }
+            if (!present.hasOwnProperty(n)) { continue; }
+            if (reg.items[n].kind === "tag") { rebuildLink(doc, present[n], reg); linked++; }
+            else { try { ensureTapeButton(doc, present[n], tapeFs(present[n], reg)); } catch (e3) {} }
         }
+        cleanTapeButtons(doc, present);
         saveReg(doc, reg);
         var msg = "Repair complete.\n\nRestored: " + restored + "\nLinks refreshed: " + linked;
         if (skipped.length) { msg += "\n\nCould not restore (page no longer exists):\n" + skipped.join("\n"); }
@@ -1683,7 +2521,8 @@ var ARTool = (function () {
                 "Find these commands under Menu > Plugins > For editing > Reference Tool (new Acrobat) or Edit > Reference Tool (classic).\n\n" +
                 "Reference Tool: click it, then click a figure and click its match (any page). Numbers run on automatically; " +
                 "use the bar at the top of the page to Undo, change Options or finish (Done).\n" +
-                "Calc Tape: enter the calculation, then click where the tape goes.\n" +
+                "Calc Tape: a calculator at the top of the page. Type an amount, then + or - (or * / by the next number); " +
+                "Place on page, then click where the tape goes. Double-click a tape to change it; drag a corner to resize it.\n" +
                 "Tag Check: list all tags and flag unmatched or broken ones.\n" +
                 "Replace Page: swap in a new version of a page and keep its tags.\n" +
                 "Repair Tags: restore tags or tapes lost outside the tool.\n\n" +
@@ -1854,7 +2693,7 @@ var ARTool = (function () {
 
     var COMMANDS = [
         { id: "placeTag", label: "Reference Tool", short: "Reference", tip: "Reference tool: click a figure, then its match. Click again to finish.", toolbar: true },
-        { id: "calcTape", label: "Calc Tape", tip: "Calculator that leaves a tape on the page", toolbar: true },
+        { id: "calcTape", label: "Calc Tape", tip: "Calculator that leaves a tape on the page (select a tape first to change it)", toolbar: true },
         { id: "tagCheck", label: "Tag Check", tip: "List all tags and flag unmatched or broken ones", toolbar: true },
         { id: "replacePage", label: "Replace Page (Keep Tags)", tip: "Replace this page and keep its tags and tapes", toolbar: true },
         { id: "repairTags", label: "Repair Tags", tip: "Restore lost tags/tapes and refresh links", toolbar: true },
@@ -1879,6 +2718,7 @@ var ARTool = (function () {
         run: function (id, doc) {
             try {
                 if (!doc && id !== "about" && id !== "checkForUpdates") { app.alert("Open a PDF first."); return; }
+                rememberDoc(doc);
                 return api[id](doc);
             } catch (e) {
                 showError(id, e);
@@ -1893,6 +2733,25 @@ var ARTool = (function () {
         },
         _followPage: function () {
             try { followPage(); } catch (e) { stopFollow(); }
+        },
+        _calcKey: function (doc, ev) {
+            try { calcKey(doc, ev); } catch (e) { showError("Calc Tape", e); }
+        },
+        _calcEdit: function (doc, ev, id) {
+            try { calcEdit(doc, ev, id); } catch (e) { showError("Calc Tape", e); }
+        },
+        _calcFocus: function (doc, on) {
+            if (capture && capture.mode === "calc" && capture.doc === doc) { capture.focused = !!on; }
+        },
+        _calcBtn: function (doc, id) {
+            try { calcButton(doc, id); } catch (e) { showError("Calc Tape", e); }
+        },
+        _tapeClick: function (doc, name, page, x, y) {
+            try { tapeClick(doc, name, page, x, y); } catch (e) { showError("Calc Tape", e); }
+        },
+        _runLater: function () { runLater(); },
+        _watch: function () {
+            try { watchTick(); } catch (e) {}
         },
         _removeCapture: function () {
             var d = api._pendingRemoval;
@@ -1911,6 +2770,12 @@ var ARTool = (function () {
             parseRelease: parseRelease,
             computeTape: computeTape,
             formatTape: formatTape,
+            parseTapeText: parseTapeText,
+            calcKeyAction: calcKeyAction,
+            refitTape: refitTape,
+            tapeSize: tapeSize,
+            tapeBodyRect: tapeBodyRect,
+            watchState: function () { return watch; },
             parseAmount: parseAmount,
             fmt: fmt,
             loadReg: loadReg,
@@ -1971,3 +2836,7 @@ ARTool.installUI();
 
 // Quiet update check a few seconds after Acrobat starts.
 var ART_updateTimer = app.setTimeOut("ARTool._autoCheck()", 8000);
+
+// Tape watcher: re-fits a tape's text after it's resized and keeps its
+// double-click button on it. Only looks at the page being viewed.
+try { ART_watchTimer = app.setInterval("ARTool._watch()", 500); } catch (e) {}

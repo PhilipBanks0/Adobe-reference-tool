@@ -5,7 +5,7 @@ An Acrobat add-on for preparing accounting work papers.
 | Feature | What it does |
 |---|---|
 | **Reference** | Click a figure in the financial statements, then its match in the support. Numbers run on automatically (A-1, A-2, …), and clicking either tag jumps to the other. |
-| **Calc Tape** | A calculator that leaves its tape on the page as a comment, so the reviewer can see how a figure was worked out. |
+| **Calc Tape** | A 10-key style calculator that leaves its tape on the page as a comment, so the reviewer can see how a figure was worked out. Double-click a tape to change it. |
 | **Tag Check** | Lists every tag with its page numbers and flags tags that are unmatched or broken. |
 | **Replace Page (Keep Tags)** | Swaps a page for a new version (for example a reissued bank statement) and puts back the tags and tapes that were on it. |
 | **Repair Tags** | Restores tags or tapes that were lost outside the tool, for example after using Acrobat's own *Replace Pages*, and refreshes all links. |
@@ -131,24 +131,34 @@ To jump between the two sides of a reference, click either tag with the normal H
 
 ### Calc Tape
 
-1. Go to the page where the tape should go and click **Calc Tape**.
-2. Type an amount in the entry box and press **Enter**. It goes straight onto the tape and the **Total** updates. Keep going:
+1. Go to the page where the tape should go and click **Calc Tape**. A calculator appears in the top-right corner of the page.
+2. Type amounts like on a 10-key adding machine. Each key acts as soon as you press it, and the tape and **Total** update straight away:
 
    ```
-   12,400 Balance per bank      Enter
-   +3,250 Deposit in transit    Enter
-   -800 Outstanding cheque      Enter
-   =                            Enter   (subtotal)
-   (50) Bank fee                Enter
+   12400 +                        adds 12,400
+   800 -                          subtracts 800
+   250 * 12 +                     adds 3,000 (250 x 12)
+   * 1.05 +                       multiplies the total so far by 1.05
+   / 2 +                          divides the total so far by 2
+   800 O/S cheque      Enter      a line with a description
+   =                   Enter      subtotal
    ```
 
-   - Negatives: `(800)` or `-800`.
-   - `x 1.05` multiplies the running total, `/ 2` divides it, and `x 5%` works too.
-   - You can also edit the lines in the tape box directly. The preview refreshes when you click out of it, or with **Refresh preview**.
-3. When you're done, press **Enter** on the empty entry box, or click **Place on page**.
+   - **+** and **-** act on the number you just typed. **\*** and **/** act on the next number.
+   - The keys only act after a plain number, so descriptions such as `O/S` or `Year-end` type normally. Press **Enter** to add a line with a description.
+   - Negatives: `(800)` or start the number with `-`.
+   - **Undo line** takes the last line off. You can also edit the lines in the box on the left; the tape updates when you click out of it.
+   - **Move** puts the calculator in another corner. It follows you as you move from page to page.
+3. Click **Place on page**. Anything still in the Amount box is added first.
 4. Click where the top-left corner of the tape should go.
 
-The tape records your initials and the date. You can drag it to a new position afterwards.
+The tape records your initials and the date. After it's placed:
+
+- **Change it:** double-click its figures. The calculator opens with everything filled in; change it and click **Update tape**. (Or select the tape and click **Calc Tape**.)
+- **Move it:** drag it by its title line or edge.
+- **Resize it:** drag a corner or edge. The text grows or shrinks to fit, so nothing is cut off.
+
+If another command interrupts a calculation, click **Calc Tape** again to pick it up where you left off. **Cancel** throws it away.
 
 ### Tag Check
 
@@ -227,6 +237,12 @@ The mock can't show how Acrobat itself behaves, so a manual check in Acrobat Pro
   - If the height is off, set `mouseYFromTop: true`.
 - [ ] Clicking a tag jumps to its match, and back again.
 - [ ] Calc Tape: the tape's columns line up in a monospaced font.
+- [ ] Calc Tape: + - * / act the moment they're pressed, and the Amount box clears; Enter keeps the cursor in the box.
+- [ ] Calc Tape: scroll to another page. The calculator follows, with the cursor back in Amount.
+- [ ] Double-click a tape's figures: the calculator opens filled in; Update tape changes it in place.
+- [ ] Drag a tape's corner smaller and larger: the text re-fits and isn't cut off. Drag it by the title line to move it.
+- [ ] A reference tag placed on a tape's total still jumps to its match.
+- [ ] Open a PDF with tapes, just look, close: Acrobat doesn't ask to save.
 - [ ] Save, close and reopen the PDF. Tags still link, and the next suggested label continues the sequence.
 - [ ] Combine two PDFs that have tapes, then run Tag Check. The tapes are counted.
 - [ ] Replace Page with `samples/updated-bank-statement.pdf`. The tags come back.

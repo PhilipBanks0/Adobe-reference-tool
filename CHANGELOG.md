@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0 - 2026-09-25
+
+- **Calc Tape now works like a 10-key adding machine.** The calculator opens on the page itself (top-right corner) instead of a pop-up window, so it can react to each key the moment you press it:
+  - Type an amount and press **+** to add it or **-** to subtract it. It goes straight onto the tape and the total updates.
+  - **\*** or **/** multiplies or divides by the next number you type: `250 * 12 +` adds 3,000. Pressing **\*** or **/** on an empty box works on the total so far: `* 1.05 +` grosses up the running total.
+  - **Enter** still adds a line, which is how you add one with a description (`800 O/S cheque`). The keys only act after a plain number, so the `/` in `O/S` or the `-` in `Year-end` type normally.
+  - **Undo line** takes the last line off, **Move** puts the calculator in another corner, and it follows you from page to page as you scroll. Click **Place on page**, then click where the tape goes.
+  - If another command interrupts a calculation, click **Calc Tape** again to pick it up where you left off. **Cancel** throws it away.
+- **Double-click a tape to change it.** The calculator opens with the tape's title, lines and initials filled in. Change them and click **Update tape**; the tape updates where it is. You can also select a tape and click **Calc Tape**.
+- **Resizing a tape no longer cuts off its text.** Drag any edge or corner and the text grows or shrinks to fill the box, and the box snaps to fit it.
+- Move a tape by dragging its title line or edge (the figures are where you double-click). Reference tags placed on a tape's figures still jump to their match.
+- Tapes from earlier versions get the double-click the first time you view their page, and their lines are read back from the tape itself.
+- Each tape now carries an invisible, non-printing button over its figures. Acrobat may show its "This document contains form fields" bar on work papers with tapes. Reviewers without the add-on aren't affected.
+
 ## 0.3.10 - 2026-09-25
 
 - **Fixed: Acrobat froze when you started the Reference tool (or Delete Tag) on a large work paper.** The add-on used to put its click-catcher and bar on every page at once, and because the bar's buttons were shared across pages, the work grew with the square of the page count: a 114-page file meant about 380,000 button redraws before the first click. Now it sets up the page you're on straight away and each page you move to a moment after you get there, so it starts just as fast on a 1,000-page work paper as on a 1-page one, and every click takes the same time however far you've gone.
