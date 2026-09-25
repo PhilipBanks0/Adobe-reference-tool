@@ -108,10 +108,15 @@ While reference mode is on, a small bar sits at the top of every page:
 
 - **Status:** shows what your next click places, e.g. `A-3 - now click its match`.
 - **Undo:** removes the last tag you placed.
+- **Delete:** click it, then click any tag to delete it.
+  - **Yes** deletes both sides.
+  - **No** deletes just the one you clicked; your next click puts it back in the right place.
 - **Options:** change the next number, colour or size.
 - **Done:** finishes reference mode.
 
 The bar doesn't print and goes away when you finish.
+
+**Fixing mistakes later:** go to **Menu → Reference Tool → Delete Tag**, then click the tag on any page. **Yes** removes both sides. **No** removes only that one: start the Reference tool again and your first click puts it back.
 
 To jump between the two sides of a reference, click either tag with the normal Hand/Select tool.
 

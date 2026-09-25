@@ -540,17 +540,69 @@ test("Move Tag moves the tag and its link", () => {
   assert.ok(links2[0].rect[0] < 400 && links2[0].rect[2] > 400);
 });
 
-test("Delete Tag removes both sides and links", () => {
+test("Delete Tag: click a tag, delete both sides and links", () => {
   const env = makeEnv(); const doc = new env.Doc(4);
-  refPairs(env, doc, [[0, 100, 100], [2, 100, 100]]);
-  env.responses.push("A-1"); env.alertAnswers.push(4);
+  refPairs(env, doc, [[0, 100, 100], [2, 300, 300]]);
   env.ART.run("deleteTag", doc);
+  assert.ok(doc.getField("ART_CAP.p0") && doc.getField("ART_CAP.p3"), "click anywhere in the document");
+  assert.ok(/Click a tag to delete/.test(doc.status()));
+  env.alertAnswers.push(4);                 // Yes: both
+  doc.click(300, 300, 2);                   // click the match on page 3
   assert.strictEqual(doc._annots.length, 0);
   assert.strictEqual(doc._links.length, 0);
+  doc.bar("done");
+  assert.strictEqual(doc.fieldNames().length, 0);
   env.ART.run("repairTags", doc);
   assert.strictEqual(doc._annots.length, 0, "repair doesn't resurrect deleted tags");
 });
 
+test("Delete Tag: clicking empty space explains and deletes nothing", () => {
+  const env = makeEnv(); const doc = new env.Doc(2);
+  refPairs(env, doc, [[0, 100, 100], [1, 100, 100]]);
+  env.ART.run("deleteTag", doc);
+  doc.click(400, 600, 0);
+  assert.ok(env.alerts.some(a => /no reference tag there/i.test(a)));
+  assert.strictEqual(doc._annots.length, 2);
+});
+
+test("Delete Tag: 'just this one' then re-place it in reference mode", () => {
+  const env = makeEnv(); const doc = new env.Doc(4);
+  refPairs(env, doc, [[0, 100, 100], [2, 300, 300]]);
+  env.ART.run("deleteTag", doc);
+  env.alertAnswers.push(3);                 // No: only this side
+  doc.click(300, 300, 2);
+  doc.bar("done");
+  assert.deepStrictEqual(names(doc), ["ART:T:A-1:1"]);
+  env.ART.run("placeTag", doc);             // reference mode asks for A-1's match first
+  assert.ok(/A-1 .*click where it should go/.test(doc.status()), doc.status());
+  doc.click(320, 350, 3);
+  assert.deepStrictEqual(names(doc), ["ART:T:A-1:1", "ART:T:A-1:2"]);
+  assert.strictEqual(doc._annots.find(a => a.name === "ART:T:A-1:2").page, 3);
+  assert.ok(/A-2 .*click the figure/.test(doc.status()), "then carries on with the sequence: " + doc.status());
+  const l1 = doc._links.find(l => l.page === 0);
+  assert.strictEqual(followLink(env, doc, l1), 3, "link follows the re-placed tag");
+});
+
+test("reference mode: bar Delete removes a tag mid-session and carries on", () => {
+  const env = makeEnv(); const doc = new env.Doc(4);
+  env.ART.run("placeTag", doc);
+  doc.click(100, 100, 0); doc.click(100, 100, 1);    // A-1 pair
+  doc.click(200, 200, 0); doc.click(200, 200, 2);    // A-2 pair
+  doc.bar("del");
+  assert.ok(/Click the tag to delete/.test(doc.status()));
+  env.alertAnswers.push(3);                           // just this side (A-1 match on p.2)
+  doc.click(100, 100, 1);
+  assert.ok(/A-1 .*click where it should go/.test(doc.status()), doc.status());
+  doc.click(150, 150, 3);                             // re-place A-1 match
+  assert.ok(/A-3 .*figure/.test(doc.status()), doc.status());
+  doc.bar("undo");                                    // undo the re-place
+  assert.ok(/A-1 .*click where it should go/.test(doc.status()), "undo steps back to re-placing: " + doc.status());
+  doc.click(160, 160, 3);
+  doc.bar("del"); doc.bar("del");                     // toggle off again
+  assert.ok(/A-3 .*figure/.test(doc.status()));
+  env.ART.run("placeTag", doc);
+  assert.deepStrictEqual(names(doc), ["ART:T:A-1:1", "ART:T:A-1:2", "ART:T:A-2:1", "ART:T:A-2:2"]);
+});
 
 test("protected (certified/secured) PDF gets a plain-English explanation", () => {
   const env = makeEnv(); const doc = new env.Doc(2);

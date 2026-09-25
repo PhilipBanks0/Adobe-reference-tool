@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.4 - 2026-09-25
+
+- **Delete references by clicking them.** On the reference bar, click **Delete**, then click the tag. Outside reference mode, use **Menu → Reference Tool → Delete Tag**, then click any tag on any page.
+- When you delete, choose **Yes** to remove both sides, or **No** to remove just the one you clicked. With No, the next click (or the next time you start the Reference tool) puts that tag back where it belongs, and its link follows.
+- Release notes in Acrobat's update message no longer show Markdown symbols.
+
 ## 0.3.3 - 2026-09-25
 
 - **One-click updates from Acrobat (Windows).** When a new version is found, click **Yes** and the updater downloads it, checks it against the release's SHA-256 checksum, and installs it. Windows asks for permission once. No more trips to the GitHub page. Restart Acrobat when it's done.

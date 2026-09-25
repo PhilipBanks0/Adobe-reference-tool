@@ -69,7 +69,7 @@ var ART_privLaunchURL = app.trustedFunction(function (url) {
 var ART_timer = null;
 
 var ARTool = (function () {
-    var VERSION = "0.3.3";
+    var VERSION = "0.3.4";
     var REPO = "PhilipBanks0/Adobe-reference-tool";
     var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
     var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -593,20 +593,26 @@ var ARTool = (function () {
     }
 
     var BAR_BUTTONS = [
-        { id: "status", w: 190, tip: "Reference Tool: what the next click places. Click to change options." },
+        { id: "status", w: 180, tip: "Reference Tool: what the next click does. Click to change options." },
         { id: "undo", w: 40, caption: "Undo", tip: "Remove the last tag placed" },
+        { id: "del", w: 44, caption: "Delete", tip: "Click Delete, then click a tag to remove it" },
         { id: "opts", w: 52, caption: "Options", tip: "Next number, colour and size" },
         { id: "done", w: 40, caption: "Done", tip: "Stop placing references" }
     ];
+    var DELETE_BAR_BUTTONS = [
+        { id: "status", w: 220, tip: "Click a reference tag to delete it" },
+        { id: "done", w: 40, caption: "Done", tip: "Stop deleting" }
+    ];
 
-    function addBarOnPage(doc, p) {
+    function addBarOnPage(doc, p, buttons) {
+        var list = buttons || BAR_BUTTONS;
         var box = doc.getPageBox("Crop", p); // rotated space [left, top, right, bottom]
         var left = Math.min(box[0], box[2]) + 6;
         var top = Math.max(box[1], box[3]) - 4;
         var h = 16;
         var x = left;
-        for (var i = 0; i < BAR_BUTTONS.length; i++) {
-            var b = BAR_BUTTONS[i];
+        for (var i = 0; i < list.length; i++) {
+            var b = list[i];
             var f = doc.addField(BAR + "." + b.id, "button", p, [x, top, x + b.w, top - h]);
             try { f.borderStyle = border.s; } catch (e) {}
             try { f.lineWidth = 1; } catch (e1) {}
@@ -647,7 +653,7 @@ var ARTool = (function () {
         }
         for (var i = 0; i < pages.length; i++) {
             addCaptureOnPage(doc, pages[i]);
-            if (opts.bar) { addBarOnPage(doc, pages[i]); }
+            if (opts.bar) { addBarOnPage(doc, pages[i], opts.buttons); }
         }
         capture = { doc: doc, page: doc.pageNum, mode: mode, data: data, keep: !!opts.keep, bar: !!opts.bar };
         if (tipKey) { tip(tipKey, tipMsg); }
@@ -676,7 +682,18 @@ var ARTool = (function () {
         var reg = loadReg(doc);
         sync(doc, reg);
         if (c.mode === "ref") {
-            refPlace(doc, reg, c.data, page, x, y);
+            if (c.data.deleting) {
+                c.data.deleting = false;
+                deleteAt(doc, reg, page, x, y, c.data);
+            } else {
+                refPlace(doc, reg, c.data, page, x, y);
+            }
+            saveReg(doc, reg);
+            setBarStatus(doc, statusText(c.data));
+            return;
+        }
+        if (c.mode === "del") {
+            deleteAt(doc, reg, page, x, y, null);
             saveReg(doc, reg);
             return;
         }
@@ -738,14 +755,89 @@ var ARTool = (function () {
     }
 
     function statusText(data) {
+        if (data.deleting) { return "Click the tag to delete"; }
+        if (data.redo) { return data.redo.label + "  -  click where it should go"; }
         return data.side === 1 ? data.label + "  -  click the figure" : data.label + "  -  now click its match";
     }
 
+    /** The reference tag under a click, if any. */
+    function tagAt(doc, page, x, y) {
+        var arts = artAnnots(doc, page);
+        var best = null;
+        var bestD = 1e9;
+        for (var i = 0; i < arts.length; i++) {
+            var p = parseName(arts[i].name);
+            if (!p || p.kind !== "tag") { continue; }
+            var r = arts[i].rect;
+            var m = 3;
+            if (x >= r[0] - m && x <= r[2] + m && y >= r[1] - m && y <= r[3] + m) {
+                var d = Math.abs(x - (r[0] + r[2]) / 2) + Math.abs(y - (r[1] + r[3]) / 2);
+                if (d < bestD) { bestD = d; best = arts[i]; }
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Delete the tag that was clicked. Asks whether to remove both sides or
+     * just this one (to place it again). data = reference-mode state, if any.
+     */
+    function deleteAt(doc, reg, page, x, y, data) {
+        var a = tagAt(doc, page, x, y);
+        if (!a) {
+            app.alert({ cTitle: "Delete", nIcon: 3, cMsg: "There's no reference tag there. Click directly on the tag's box." });
+            return false;
+        }
+        var p = parseName(a.name);
+        var present = sync(doc, reg);
+        var other = present[tagName(p.label, p.side === 1 ? 2 : 1)];
+        var both = true;
+        if (other) {
+            var ans = app.alert({
+                cTitle: "Delete " + p.label,
+                nIcon: 2,
+                nType: 3,
+                cMsg: "Delete reference " + p.label + "?\n\n" +
+                    "Yes: delete both " + p.label + " tags (this one and its match on p." + (other.page + 1) + ")\n" +
+                    "No: delete only this one, then click where it should go\n" +
+                    "Cancel: keep it"
+            });
+            if (ans === 2) { return false; }
+            both = (ans === 4);
+        } else if (app.alert({ cTitle: "Delete " + p.label, nIcon: 2, nType: 2, cMsg: "Delete tag " + p.label + "?" }) !== 4) {
+            return false;
+        }
+        destroyArt(doc, reg, a);
+        delete reg.items[a.name];
+        if (both) {
+            if (other) { destroyArt(doc, reg, other); delete reg.items[other.name]; }
+            if (reg.redo && reg.redo.label === p.label) { reg.redo = null; }
+            if (reg.pending === p.label) { reg.pending = null; }
+            if (data) {
+                if (data.redo && data.redo.label === p.label) { data.redo = null; }
+                if (data.label === p.label && data.side === 2) { data.side = 1; }
+            }
+        } else {
+            reg.redo = { label: p.label, side: p.side };
+            if (data) { data.redo = { label: p.label, side: p.side }; }
+        }
+        return true;
+    }
+
     function refPlace(doc, reg, data, page, x, y) {
+        if (data.redo) {
+            // Re-placing one side of a reference after deleting it.
+            var t = data.redo;
+            addTag(doc, reg, t.label, t.side, page, tagRectAt(t.label, x, y), currentStyle());
+            data.history.push({ name: tagName(t.label, t.side), redo: true });
+            data.redo = null;
+            reg.redo = null;
+            return;
+        }
         var label = data.label;
         var side = data.side;
         addTag(doc, reg, label, side, page, tagRectAt(label, x, y), currentStyle());
-        data.history.push(tagName(label, side));
+        data.history.push({ name: tagName(label, side) });
         var m = label.match(/^(.*?)(\d+)$/);
         if (m && m[1] === reg.prefix && Number(m[2]) >= reg.next) { reg.next = Number(m[2]) + 1; }
         if (side === 1) {
@@ -763,12 +855,20 @@ var ARTool = (function () {
     function refUndo(doc) {
         var c = capture;
         if (!c || c.mode !== "ref" || !c.data.history.length) { return; }
-        var name = c.data.history.pop();
+        var entry = c.data.history.pop();
+        var name = entry.name;
         var reg = loadReg(doc);
         var present = sync(doc, reg);
         var p = parseName(name);
         if (present[name]) { destroyArt(doc, reg, present[name]); }
         delete reg.items[name];
+        if (entry.redo) {
+            c.data.redo = { label: p.label, side: p.side };
+            reg.redo = c.data.redo;
+            saveReg(doc, reg);
+            setBarStatus(doc, statusText(c.data));
+            return;
+        }
         c.data.label = p.label;
         c.data.side = p.side;
         reg.pending = p.side === 2 ? p.label : null;
@@ -876,7 +976,13 @@ var ARTool = (function () {
     function stopReferenceMode(doc) {
         var c = capture;
         cancelCapture(doc);
-        if (c && c.mode === "ref" && c.data.side === 2) {
+        if (c && c.mode === "ref" && c.data.redo) {
+            app.alert({
+                cTitle: "Reference Tool",
+                nIcon: 3,
+                cMsg: c.data.redo.label + " still needs placing. Next time you start the Reference tool it will ask for it first."
+            });
+        } else if (c && c.mode === "ref" && c.data.side === 2) {
             app.alert({
                 cTitle: "Reference Tool",
                 nIcon: 3,
@@ -894,7 +1000,8 @@ var ARTool = (function () {
         removeCaptureFields(doc);
         var reg = loadReg(doc);
         var present = sync(doc, reg);
-        var data = { label: null, side: 1, history: [] };
+        var data = { label: null, side: 1, history: [], redo: null };
+        if (reg.redo && !present[tagName(reg.redo.label, reg.redo.side)]) { data.redo = reg.redo; }
         if (reg.pending) {
             data.label = reg.pending;
             data.side = 2;
@@ -919,7 +1026,7 @@ var ARTool = (function () {
             "Reference mode is on.\n\n" +
             "Click a figure to place " + data.label + ", then click its match on any page. " +
             "The next number follows automatically.\n\n" +
-            "Use the bar at the top of the page to Undo, change Options, or finish (Done). " +
+            "Use the bar at the top of the page to Undo, Delete a tag, change Options, or finish (Done). " +
             "Clicking the Reference button again also finishes.",
             { allPages: true, bar: true, keep: true });
         setBarStatus(doc, statusText(data));
@@ -927,9 +1034,18 @@ var ARTool = (function () {
 
     function barClick(id, doc) {
         var c = capture;
+        if (c && c.mode === "del" && c.doc === doc) {
+            if (id === "done") { cancelCapture(doc); }
+            return;
+        }
         if (!c || c.mode !== "ref" || c.doc !== doc) { removeCaptureFields(doc); return; }
         if (id === "done") { stopReferenceMode(doc); return; }
         if (id === "undo") { refUndo(doc); return; }
+        if (id === "del") {
+            c.data.deleting = !c.data.deleting;
+            setBarStatus(doc, statusText(c.data));
+            return;
+        }
         if (id === "opts" || id === "status") {
             var reg = loadReg(doc);
             var present = sync(doc, reg);
@@ -1326,23 +1442,18 @@ var ARTool = (function () {
         startCapture(doc, "move", { name: tagName(label, which) }, "move", "Click the new spot for tag " + label + ".");
     }
 
+    /** Click-to-delete: click any reference tag (any page) to remove it. */
     function deleteTag(doc) {
-        if (capture) { cancelCapture(doc); }
-        var reg = loadReg(doc);
-        var present = sync(doc, reg);
-        var label = askLabel(doc, reg, "Delete Tag");
-        if (!label) { return; }
-        var n1 = tagName(label, 1);
-        var n2 = tagName(label, 2);
-        if (!reg.items[n1] && !reg.items[n2]) { app.alert("No tag named " + label + " was found."); return; }
-        if (app.alert({ cTitle: "Delete Tag", nIcon: 2, nType: 2, cMsg: "Delete both " + label + " tags?" }) !== 4) { return; }
-        var names = [n1, n2];
-        for (var i = 0; i < names.length; i++) {
-            if (present[names[i]]) { destroyArt(doc, reg, present[names[i]]); }
-            delete reg.items[names[i]];
+        if (capture) {
+            // In reference mode, the same thing as the bar's Delete button.
+            if (capture.mode === "ref" && capture.doc === doc) { barClick("del", doc); return; }
+            cancelCapture(doc);
         }
-        if (reg.pending === label) { reg.pending = null; }
-        saveReg(doc, reg);
+        startCapture(doc, "del", {}, "delmode",
+            "Click a reference tag to delete it. You'll be asked whether to delete both sides or just that one.\n\n" +
+            "Click Done on the bar at the top of the page when you've finished.",
+            { allPages: true, bar: true, keep: true, buttons: DELETE_BAR_BUTTONS });
+        setBarStatus(doc, "Click a tag to delete it");
     }
 
     // -----------------------------------------------------------------------
@@ -1666,7 +1777,7 @@ var ARTool = (function () {
         { id: "replacePage", label: "Replace Page (Keep Tags)", tip: "Replace this page and keep its tags and tapes", toolbar: true },
         { id: "repairTags", label: "Repair Tags", tip: "Restore lost tags/tapes and refresh links", toolbar: true },
         { id: "moveTag", label: "Move Tag", tip: "Move a tag to a new spot", toolbar: false },
-        { id: "deleteTag", label: "Delete Tag", tip: "Delete both sides of a tag", toolbar: false },
+        { id: "deleteTag", label: "Delete Tag", tip: "Click a tag to delete it", toolbar: false },
         { id: "checkForUpdates", label: "Check for Updates", tip: "See if a newer version is available", toolbar: false },
         { id: "about", label: "About / Help", tip: "How to use the Reference Tool", toolbar: false }
     ];
