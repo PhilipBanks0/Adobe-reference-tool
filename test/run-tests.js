@@ -609,6 +609,12 @@ test("Windows: 'Install now' starts the installed updater, no web page", () => {
   assert.deepStrictEqual(env.launched, ["reftool-update:install"]);
 });
 
+test("release notes are shown without Markdown symbols", () => {
+  const { parseRelease } = makeEnv().ART._internal;
+  const r = parseRelease(JSON.stringify({ tag_name: "v1.0.0", body: "- **One-click** updates via `reftool-update:`" }));
+  assert.strictEqual(r.notes, "- One-click updates via reftool-update:");
+});
+
 test("Windows: if the updater can't be started, fall back to Start menu + download page", () => {
   const env = makeEnv();
   env.ctx.app.platform = "WIN";

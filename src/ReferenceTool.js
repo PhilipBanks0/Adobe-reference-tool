@@ -1373,7 +1373,8 @@ var ARTool = (function () {
         return {
             version: String(r.tag_name).replace(/^v/i, ""),
             url: r.html_url || RELEASES_URL,
-            notes: String(r.body || "").replace(/\r/g, "")
+            // Release notes are Markdown; show them as plain text.
+            notes: String(r.body || "").replace(/\r/g, "").replace(/\*\*|__|`/g, "")
         };
     }
 
