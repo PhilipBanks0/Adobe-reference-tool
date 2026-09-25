@@ -113,7 +113,7 @@ Everyone's updater picks up the new release from there. To build the files local
 4. Keep going: the next click places `A-2`, then its match, and so on. You don't type numbers.
 5. When you're finished, click **Done** on the bar at the top of the page, or click **Reference** again.
 
-While reference mode is on, a small bar sits at the top of every page:
+While reference mode is on, a small bar sits at the top of the page. It appears on each page a moment after you get there (the add-on sets pages up as you reach them, so it's just as quick on a very large work paper); if a click doesn't place a tag, wait for the bar:
 
 - **Status:** shows what your next click places, e.g. `A-3 - now click its match`.
 - **Undo:** removes the last tag you placed.

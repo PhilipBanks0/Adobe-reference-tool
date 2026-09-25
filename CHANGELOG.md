@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.10 - 2026-09-25
+
+- **Fixed: Acrobat froze when you started the Reference tool (or Delete Tag) on a large work paper.** The add-on used to put its click-catcher and bar on every page at once, and because the bar's buttons were shared across pages, the work grew with the square of the page count: a 114-page file meant about 380,000 button redraws before the first click. Now it sets up the page you're on straight away and each page you move to a moment after you get there, so it starts just as fast on a 1,000-page work paper as on a 1-page one, and every click takes the same time however far you've gone.
+- If a click on a page you've just scrolled to doesn't place a tag, wait until the bar appears at the top of that page; that's the sign it's ready.
+
 ## 0.3.9 - 2026-09-25
 
 - **Fixed: the Reference Tool menu didn't show in the new Acrobat.** It's now under **Menu → Plugins → For editing → Reference Tool**, next to your other add-ons (in classic Acrobat: **Edit → Reference Tool**). Acrobat accepted the old spot directly in Menu without an error, but never displayed it.

@@ -15,7 +15,7 @@ const assert = require("assert");
 // ---------------------------------------------------------------- mocks
 function makeEnvWith(menuParents) { return makeEnv(menuParents); }
 function makeEnv(menuParents) {
-  const env = { menuParents: menuParents || null, httpRequests: [], launched: [], alerts: [], alertAnswers: [], responses: [], dialogs: [], dialogResults: [], timers: [] };
+  const env = { menuParents: menuParents || null, httpRequests: [], launched: [], alerts: [], alertAnswers: [], responses: [], dialogs: [], dialogResults: [], timers: [], intervals: [], widgetUpdates: 0 };
 
   class Annot {
     constructor(doc, props) { this._doc = doc; Object.assign(this, props); if (!this.name) this.name = "auto" + Math.random(); this.rect = props.rect.slice(); }
@@ -49,7 +49,9 @@ function makeEnv(menuParents) {
     addField(name, type, p, box) {
       let f = this._fields[name];
       if (!f) {
-        f = { name, widgets: [], caption: "", setAction(ev, s) { this.script = s; }, buttonSetCaption(c) { this.caption = c; } };
+        const raw = { name, widgets: [], caption: "", setAction(ev, s) { this.script = s; }, buttonSetCaption(c) { this.caption = c; env.widgetUpdates += raw.widgets.length; } };
+        // Like Acrobat: setting a property on a field redraws every widget it has.
+        f = new Proxy(raw, { set(o, k, v) { o[k] = v; if (k !== "page") env.widgetUpdates += o.widgets.length; return true; } });
         this._fields[name] = f;
       }
       f.widgets.push({ page: p, box });
@@ -70,9 +72,12 @@ function makeEnv(menuParents) {
       this._replaced = o;
     }
     scroll() {}
+    // helper: the user goes to a page and waits a moment (the add-on's timer ticks)
+    goTo(page) { this.pageNum = page; runIntervals(3); }
     // helper: simulate a user click on the page (the capture field over it)
     click(x, y, page) {
       if (page === undefined) page = this.pageNum;
+      if (page !== this.pageNum) this.goTo(page);
       const f = this._fields["ART_CAP.p" + page];
       assert(f, "capture field should exist on page " + page);
       const fn = new (vm.runInContext("Function", ctx))("event", f.script.replace(/this\.mouseX/g, x).replace(/this\.mouseY/g, y));
@@ -81,12 +86,12 @@ function makeEnv(menuParents) {
     }
     // helper: click a button on the reference options bar
     bar(id) {
-      const f = this._fields["ART_BAR." + id];
+      const f = this._fields["ART_BAR." + id + ".p" + this.pageNum];
       assert(f, "bar button " + id + " should exist");
       new (vm.runInContext("Function", ctx))("event", f.script).call(this, { target: f });
       runTimers();
     }
-    status() { const f = this._fields["ART_BAR.status"]; return f ? f.caption : null; }
+    status() { const f = this._fields["ART_BAR.status.p" + this.pageNum]; return f ? f.caption : null; }
   }
 
   let ctx;
@@ -115,6 +120,8 @@ function makeEnv(menuParents) {
     launchURL(u) { env.launched.push(u); },
     setTimeOut(expr) { env.timers.push(expr); return { id: 1 }; },
     clearTimeOut() {},
+    setInterval(expr) { const t = { expr }; env.intervals.push(t); return t; },
+    clearInterval(t) { env.intervals = env.intervals.filter(x => x !== t); },
     addSubMenu(o) {
       if (env.menuParents && env.menuParents.indexOf(o.cParent) < 0) throw new TypeError("Invalid argument type.");
       (env.submenus = env.submenus || []).push(o.cParent);
@@ -122,6 +129,7 @@ function makeEnv(menuParents) {
     addMenuItem(o) { (env.menuItems = env.menuItems || []).push(o.cUser); }, addToolButton(o) { (env.buttons = env.buttons || []).push(o.cLabel); (env.buttonObjs = env.buttonObjs || []).push(o); }
   };
   function runTimers() { while (env.timers.length) vm.runInContext(env.timers.shift(), ctx); }
+  function runIntervals(ticks) { for (let i = 0; i < (ticks || 1); i++) env.intervals.slice().forEach(t => vm.runInContext(t.expr, ctx)); }
 
   ctx = vm.createContext({
     app, JSON, Math, Date, String, Number, Array, Object, RegExp, Error, parseInt, parseFloat,
@@ -141,6 +149,7 @@ function makeEnv(menuParents) {
   env.ART = ctx.ARTool;
   env.Doc = Doc;
   env.runTimers = runTimers;
+  env.runIntervals = runIntervals;
   return env;
 }
 
@@ -218,7 +227,7 @@ test("reference mode: click, click, click - numbers run on without prompts", () 
   const env = makeEnv(); const doc = new env.Doc(20);
   env.ART.run("placeTag", doc);
   assert.strictEqual(env.dialogs.length, 1, "options panel shown on start");
-  assert.ok(doc.getField("ART_CAP.p0") && doc.getField("ART_CAP.p19"), "capture on every page");
+  assert.ok(doc.getField("ART_CAP.p0") && !doc.getField("ART_CAP.p19"), "only the page being viewed is set up at the start");
   assert.ok(/A-1 .*click the figure/.test(doc.status()), doc.status());
   const promptsBefore = env.alerts.length + env.responses.length;
   doc.click(300, 400, 0);
@@ -231,6 +240,7 @@ test("reference mode: click, click, click - numbers run on without prompts", () 
   assert.strictEqual(env.dialogs.length, 1, "no more dialogs while placing");
   env.ART.run("placeTag", doc);           // finish
   assert.strictEqual(doc.fieldNames().length, 0, "all capture/bar fields removed");
+  assert.strictEqual(env.intervals.length, 0, "page-following timer stopped");
   assert.deepStrictEqual(names(doc), ["ART:T:A-1:1", "ART:T:A-1:2", "ART:T:A-2:1", "ART:T:A-2:2"]);
   const reg = JSON.parse(doc.info.ARTRegister);
   assert.strictEqual(reg.pending, null);
@@ -319,13 +329,60 @@ test("bar: Done finishes and cleans up", () => {
   assert.strictEqual(doc.fieldNames().length, 0);
 });
 
-test("bar sits at the top of each page", () => {
+test("bar sits at the top of each page, with its own buttons on every page", () => {
   const env = makeEnv(); const doc = new env.Doc(3);
   env.ART.run("placeTag", doc);
-  const st = doc.getField("ART_BAR.status");
-  assert.strictEqual(st.widgets.length, 3, "one on each page");
-  assert.ok(st.widgets[0].box[1] <= 792 && st.widgets[0].box[1] > 770, "near the top");
-  ["undo", "opts", "done"].forEach(id => assert.ok(doc.getField("ART_BAR." + id)));
+  env.runIntervals(3);
+  assert.ok(doc.getField("ART_BAR.status.p1") && !doc.getField("ART_BAR.status.p2"), "neighbouring page set up, far page not yet");
+  doc.goTo(2);
+  [0, 1, 2].forEach(p => {
+    const st = doc.getField("ART_BAR.status.p" + p);
+    assert.ok(st, "bar on page " + p);
+    assert.strictEqual(st.widgets.length, 1, "not shared with other pages");
+    assert.ok(st.widgets[0].box[1] <= 792 && st.widgets[0].box[1] > 770, "near the top");
+    ["undo", "opts", "done"].forEach(id => assert.ok(doc.getField("ART_BAR." + id + ".p" + p)));
+  });
+});
+
+test("large work paper: starting and clicking don't slow down with page count", () => {
+  const env = makeEnv(); const doc = new env.Doc(2000);
+  doc.pageNum = 1000;
+  env.ART.run("placeTag", doc);
+  const atStart = env.widgetUpdates;
+  assert.ok(atStart < 150, "start touches one page, not 2,000 (" + atStart + " redraws)");
+  assert.ok(doc.fieldNames().length <= 6, "fields on one page only: " + doc.fieldNames().length);
+  // Work through 60 pages, a pair per page; every click should cost about the same.
+  const costs = [];
+  for (let p = 1000; p < 1060; p++) {
+    const before = env.widgetUpdates;
+    doc.click(100, 100, p);
+    doc.click(200, 200, p + 1);
+    costs.push(env.widgetUpdates - before);
+  }
+  assert.ok(Math.max(...costs) < 3 * Math.min(...costs) + 60, "click cost stays flat: " + costs.slice(0, 3) + " ... " + costs.slice(-3));
+  assert.ok(Object.values(doc._fields).every(f => f.widgets.length === 1), "no field shared across pages");
+  env.ART.run("placeTag", doc);
+  assert.strictEqual(doc.fieldNames().length, 0);
+  assert.strictEqual(names(doc).length, 120);
+});
+
+test("status on a page visited earlier catches up when you go back", () => {
+  const env = makeEnv(); const doc = new env.Doc(50);
+  env.ART.run("placeTag", doc);
+  doc.click(10, 10, 0);                   // A-1 figure on page 1
+  doc.click(20, 20, 30);                  // its match on page 31
+  doc.goTo(0);
+  assert.ok(/^A-2/.test(doc.status()), "page 1's bar shows the new status: " + doc.status());
+});
+
+test("closing the document stops reference mode's timer", () => {
+  const env = makeEnv(); const doc = new env.Doc(5);
+  env.ART.run("placeTag", doc);
+  assert.strictEqual(env.intervals.length, 1);
+  Object.defineProperty(doc, "pageNum", { get() { throw new Error("closed"); } });
+  env.runIntervals(1);
+  assert.strictEqual(env.intervals.length, 0);
+  assert.strictEqual(env.ART.isActive(), false);
 });
 
 test("links still work after pages are reordered", () => {
@@ -544,6 +601,7 @@ test("Delete Tag: click a tag, delete both sides and links", () => {
   const env = makeEnv(); const doc = new env.Doc(4);
   refPairs(env, doc, [[0, 100, 100], [2, 300, 300]]);
   env.ART.run("deleteTag", doc);
+  doc.goTo(0); doc.goTo(3);
   assert.ok(doc.getField("ART_CAP.p0") && doc.getField("ART_CAP.p3"), "click anywhere in the document");
   assert.ok(/Click a tag to delete/.test(doc.status()));
   env.alertAnswers.push(4);                 // Yes: both

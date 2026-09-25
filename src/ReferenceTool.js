@@ -67,9 +67,10 @@ var ART_privLaunchURL = app.trustedFunction(function (url) {
 });
 
 var ART_timer = null;
+var ART_followTimer = null; // reference mode: follows the page being viewed
 
 var ARTool = (function () {
-    var VERSION = "0.3.9";
+    var VERSION = "0.3.10";
     var REPO = "PhilipBanks0/Adobe-reference-tool";
     var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
     var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -536,7 +537,14 @@ var ARTool = (function () {
     // -----------------------------------------------------------------------
     // Click capture. Transparent buttons laid over the page(s) record where
     // the user clicks. Reference mode also puts a small options bar at the
-    // top of every page: status, Undo, Options and Done.
+    // top of the page: status, Undo, Options and Done.
+    //
+    // Reference and delete mode don't set up every page at once: a big work
+    // paper would keep Acrobat busy for minutes. They set up the page being
+    // viewed, and a timer then adds its neighbours, one page per tick so
+    // Acrobat never stalls, following the user through the document. Every page gets its own uniquely named buttons:
+    // a property set on a field changes all of its widgets, so shared names
+    // made the setup time grow with the square of the page count.
     // -----------------------------------------------------------------------
     var CAP = "ART_CAP";
     var BAR = "ART_BAR";
@@ -571,6 +579,7 @@ var ARTool = (function () {
     function cancelCapture(doc) {
         var old = capture;
         capture = null;
+        stopFollow();
         removeCaptureFields(doc);
         if (old && old.doc !== doc) { removeCaptureFields(old.doc); }
     }
@@ -613,7 +622,7 @@ var ARTool = (function () {
         var x = left;
         for (var i = 0; i < list.length; i++) {
             var b = list[i];
-            var f = doc.addField(BAR + "." + b.id, "button", p, [x, top, x + b.w, top - h]);
+            var f = doc.addField(BAR + "." + b.id + ".p" + p, "button", p, [x, top, x + b.w, top - h]);
             try { f.borderStyle = border.s; } catch (e) {}
             try { f.lineWidth = 1; } catch (e1) {}
             try { f.strokeColor = ["RGB", 0.2, 0.35, 0.6]; } catch (e2) {}
@@ -629,33 +638,106 @@ var ARTool = (function () {
         }
     }
 
-    function setBarStatus(doc, text) {
+    function setStatusOn(doc, p, text) {
         try {
-            var f = doc.getField(BAR + ".status");
+            var f = doc.getField(BAR + ".status.p" + p);
             if (f) { f.buttonSetCaption(text); }
         } catch (e) {}
     }
 
+    function covered(c, p) { return c.pages.hasOwnProperty(String(p)); }
+
+    /** Bring the status caption on the pages near `center` up to date (c.pages[p] = text shown there). */
+    function refreshNear(c, center) {
+        if (!c.bar) { return; }
+        for (var p = center - 1; p <= center + 1; p++) {
+            if (covered(c, p) && c.pages[p] !== c.statusText) {
+                setStatusOn(c.doc, p, c.statusText);
+                c.pages[p] = c.statusText;
+            }
+        }
+    }
+
+    /**
+     * Change the status caption. Only the pages near the one being viewed are
+     * updated straight away (so a click stays quick however many pages have
+     * been visited); the timer catches the others up when the user gets there.
+     */
+    function setBarStatus(doc, text) {
+        var c = capture;
+        if (!c || c.doc !== doc || !c.bar) { return; }
+        c.statusText = text;
+        var n = 0;
+        try { n = doc.pageNum; } catch (e) {}
+        refreshNear(c, n);
+    }
+
+    var FOLLOW_MS = 300;
+
+    /** Put the capture button (and the bar) on page p, once. */
+    function coverPage(c, p) {
+        if (p < 0 || p >= c.doc.numPages || covered(c, p)) { return; }
+        c.pages[p] = "";
+        addCaptureOnPage(c.doc, p);
+        if (c.bar) {
+            addBarOnPage(c.doc, p, c.buttons);
+            if (c.statusText) { setStatusOn(c.doc, p, c.statusText); }
+            c.pages[p] = c.statusText;
+        }
+    }
+
+    /** Set up one more page near the one being viewed (it first, then the next, then the previous). */
+    function coverNear(c, center) {
+        var order = [center, center + 1, center - 1];
+        for (var i = 0; i < order.length; i++) {
+            var p = order[i];
+            if (p >= 0 && p < c.doc.numPages && !covered(c, p)) { coverPage(c, p); return true; }
+        }
+        return false;
+    }
+
+    function stopFollow() {
+        try { if (ART_followTimer) { app.clearInterval(ART_followTimer); } } catch (e) {}
+        ART_followTimer = null;
+    }
+
+    /** Timer: set up the pages the user moves to, and keep their status caption current. */
+    function followPage() {
+        var c = capture;
+        if (!c || !c.follow) { stopFollow(); return; }
+        var n;
+        try { n = c.doc.pageNum; } catch (e) { capture = null; stopFollow(); return; } // document closed
+        if (!coverNear(c, n)) { refreshNear(c, n); }
+    }
+
     /**
      * Start waiting for clicks.
-     *   opts.allPages : capture on every page (reference mode) instead of the current page
+     *   opts.allPages : clicks can go on any page (reference and delete mode): set up the
+     *                   current page now and the others as the user reaches them
      *   opts.bar      : show the options bar
      *   opts.keep     : keep capturing after each click (reference mode)
      */
     function startCapture(doc, mode, data, tipKey, tipMsg, opts) {
         opts = opts || {};
         cancelCapture(doc);
-        var pages = [];
+        var c = {
+            doc: doc, page: doc.pageNum, mode: mode, data: data, keep: !!opts.keep, bar: !!opts.bar,
+            buttons: opts.buttons, pages: {}, statusText: "", follow: false
+        };
+        capture = c;
         if (opts.allPages) {
-            for (var p = 0; p < doc.numPages; p++) { pages.push(p); }
+            // Clicks can go on any page: set up this one now, the others as
+            // the user gets to them.
+            coverPage(c, doc.pageNum);
+            try {
+                ART_followTimer = app.setInterval("ARTool._followPage()", FOLLOW_MS);
+                c.follow = true;
+            } catch (e) {
+                for (var p = 0; p < doc.numPages; p++) { coverPage(c, p); } // no timers: every page
+            }
         } else {
-            pages.push(doc.pageNum);
+            coverPage(c, doc.pageNum);
         }
-        for (var i = 0; i < pages.length; i++) {
-            addCaptureOnPage(doc, pages[i]);
-            if (opts.bar) { addBarOnPage(doc, pages[i], opts.buttons); }
-        }
-        capture = { doc: doc, page: doc.pageNum, mode: mode, data: data, keep: !!opts.keep, bar: !!opts.bar };
         if (tipKey) { tip(tipKey, tipMsg); }
     }
 
@@ -1808,6 +1890,9 @@ var ARTool = (function () {
         },
         _onCapture: function (doc, page, x, y) {
             try { onCapture(doc, page, x, y); } catch (e) { showError("placing", e); }
+        },
+        _followPage: function () {
+            try { followPage(); } catch (e) { stopFollow(); }
         },
         _removeCapture: function () {
             var d = api._pendingRemoval;
