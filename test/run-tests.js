@@ -20,7 +20,10 @@ function makeEnv(menuParents) {
   class Annot {
     constructor(doc, props) { this._doc = doc; Object.assign(this, props); if (!this.name) this.name = "auto" + Math.random(); this.rect = props.rect.slice(); }
     getProps() { const o = {}; for (const k of Object.keys(this)) if (k[0] !== "_") o[k] = Array.isArray(this[k]) ? this[k].slice() : this[k]; return o; }
-    destroy() { this._doc._annots = this._doc._annots.filter(a => a !== this); }
+    destroy() {
+      if (this.readOnly) throw new Error("NotAllowedError: annotation is read-only"); // like Acrobat
+      this._doc._annots = this._doc._annots.filter(a => a !== this);
+    }
   }
   class Link {
     constructor(page, rect) { this.page = page; this.rect = rect; this.action = null; }
@@ -371,6 +374,30 @@ test("calc tape posts a monospaced comment where clicked", () => {
   assert.ok(Math.abs(tape.rect[3] - 700) < 0.01 && Math.abs(tape.rect[0] - 50) < 0.01, "top-left at click");
 });
 
+test("calc tape preview and total update as you type", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  let dlg = null; const shown = {};
+  env.ctx.app.execDialog = d => {
+    dlg = d;
+    const fields = { titl: "Bank rec", ents: "", init: "GR" };
+    const h = { load(o) { Object.assign(shown, o); Object.assign(fields, o); }, store() { return Object.assign({}, fields); }, enable() {} };
+    d.initialize(h);
+    assert.strictEqual(shown.totl, "", "empty to start");
+    fields.ents = "12,400 Cash"; d.ents(h);
+    assert.strictEqual(shown.totl, "12,400.00");
+    assert.ok(/12,400\.00 T  Total/.test(shown.prev), shown.prev);
+    fields.ents = "12,400 Cash\n-800 cheque"; d.ents(h);
+    assert.strictEqual(shown.totl, "11,600.00");
+    fields.ents = "12,400 Cash\n-800 cheque\n+"; d.ents(h);   // half-typed line
+    assert.strictEqual(shown.totl, "11,600.00", "total holds while a line is half typed");
+    fields.titl = "Bank reconciliation"; d.titl(h);
+    assert.ok(/TAPE: Bank reconciliation/.test(shown.prev));
+    return "cancel";
+  };
+  env.ART.run("calcTape", doc);
+  assert.ok(dlg && typeof dlg.ents === "function", "live handler on the entries box");
+});
+
 test("calc tape with bad entry reopens dialog, then works", () => {
   const env = makeEnv(); const doc = new env.Doc(1);
   env.dialogResults.push({ titl: "", ents: "abc", init: "" }, { titl: "", ents: "5\n5", init: "" });
@@ -397,7 +424,7 @@ test("tag check flags unmatched and broken tags", () => {
   const env = makeEnv(); const doc = new env.Doc(10);
   refPairs(env, doc, [[0, 10, 10], [4, 10, 10], [4, 50, 50]]); // A-2 unmatched
   // A-1 side 2 deleted outside the tool
-  doc._annots.find(a => a.name === "ART:T:A-1:2").destroy();
+  (t => { t.readOnly = false; t.destroy(); })(doc._annots.find(a => a.name === "ART:T:A-1:2"));
   let loaded = null;
   env.ctx.app.execDialog = d => { const dl = { load(o) { loaded = o; } }; d.initialize(dl); return "ok"; };
   const rep = env.ART.run("tagCheck", doc);

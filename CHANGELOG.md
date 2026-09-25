@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 - 2026-09-25
+
+- Calc Tape: the preview and a running **Total** box now update as you type, so you can see the calculation build up. (A **Refresh preview** button is still there as a backup.)
+- Fix: **Delete Tag** (and Undo / Move Tag) left the tag's box on the page. Tags are locked so clicks reach their link, and Acrobat won't delete a locked comment; they're now unlocked first. If deleting ever fails, you get an error message instead of nothing happening.
+
 ## 0.3.0 - 2026-09-25
 
 - **Reference mode.** Click **Reference** (toolbar or Menu → Reference Tool), then click a figure and click its match on any page. The next number follows automatically (A-1, A-2, …); there are no prompts between clicks.

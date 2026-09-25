@@ -69,7 +69,7 @@ var ART_privLaunchURL = app.trustedFunction(function (url) {
 var ART_timer = null;
 
 var ARTool = (function () {
-    var VERSION = "0.3.0";
+    var VERSION = "0.3.1";
     var REPO = "PhilipBanks0/Adobe-reference-tool";
     var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
     var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -526,7 +526,11 @@ var ARTool = (function () {
             if (item.linkRect && item.linkPage === annot.page) { removeLinkAt(doc, item.linkPage, item.linkRect); }
             removeLinkAt(doc, annot.page, toRotatedRect(doc, annot.page, annot.rect));
         }
-        try { annot.destroy(); } catch (e) {}
+        // Tags are read-only (so clicks reach the link); Acrobat won't delete a
+        // read-only annotation until that's switched off.
+        try { annot.readOnly = false; } catch (e1) {}
+        try { annot.lock = false; } catch (e2) {}
+        annot.destroy();
     }
 
     // -----------------------------------------------------------------------
@@ -954,19 +958,32 @@ var ARTool = (function () {
     // -----------------------------------------------------------------------
     // Commands
     // -----------------------------------------------------------------------
+    /** Preview text and running total for the tape dialog. */
+    function tapePreview(r) {
+        var calc = computeTape(r.ents);
+        var txt = formatTape(r.titl, calc, r.init);
+        // While typing, a half-finished line isn't an error worth shouting about.
+        if (calc.errors.length) { txt = "Check: " + calc.errors.join("\n") + "\n\n" + txt; }
+        var hasRows = calc.rows.length > 0;
+        return { text: hasRows ? txt : "", total: hasRows ? trim(fmt(calc.total)) : "" };
+    }
+
     function tapeDialog(prefill) {
         var result = null;
+        function refresh(d) {
+            var p = tapePreview(d.store());
+            d.load({ prev: p.text, totl: p.total });
+        }
         var dlg = {
             initialize: function (d) {
-                d.load({ titl: prefill.titl, ents: prefill.ents, init: prefill.init, prev: "" });
+                d.load({ titl: prefill.titl, ents: prefill.ents, init: prefill.init, prev: "", totl: "" });
+                refresh(d);
             },
-            prvw: function (d) {
-                var r = d.store();
-                var calc = computeTape(r.ents);
-                var txt = formatTape(r.titl, calc, r.init);
-                if (calc.errors.length) { txt = calc.errors.join("\n") + "\n\n" + txt; }
-                d.load({ prev: txt });
-            },
+            // Acrobat calls these as you type, so the preview stays current.
+            ents: function (d) { refresh(d); },
+            titl: function (d) { refresh(d); },
+            init: function (d) { refresh(d); },
+            prvw: function (d) { refresh(d); },
             commit: function (d) { result = d.store(); },
             description: {
                 name: "Calculator Tape",
@@ -983,16 +1000,24 @@ var ARTool = (function () {
                                 { type: "static_text", name: "Entries (one per line):  [+ - * /] amount  description" },
                                 { type: "static_text", name: "(800) or -800 = negative.   =  on its own line = subtotal." },
                                 { type: "edit_text", item_id: "ents", multiline: true, width: 300, height: 220 },
-                                { type: "static_text", name: "Initials:" },
-                                { type: "edit_text", item_id: "init", width: 80 },
-                                { type: "button", item_id: "prvw", name: "Preview tape" }
+                                {
+                                    type: "view",
+                                    align_children: "align_row",
+                                    elements: [
+                                        { type: "static_text", name: "Initials:" },
+                                        { type: "edit_text", item_id: "init", width: 60 },
+                                        { type: "static_text", name: "   Total:" },
+                                        { type: "edit_text", item_id: "totl", readonly: true, width: 110 }
+                                    ]
+                                },
+                                { type: "button", item_id: "prvw", name: "Refresh preview" }
                             ]
                         },
                         {
                             type: "view",
                             align_children: "align_left",
                             elements: [
-                                { type: "static_text", name: "Preview:" },
+                                { type: "static_text", name: "Preview (updates as you type):" },
                                 { type: "edit_text", item_id: "prev", multiline: true, readonly: true, width: 320, height: 330 }
                             ]
                         }
@@ -1630,6 +1655,7 @@ var ARTool = (function () {
             buildReport: buildReport,
             getCapture: function () { return capture; },
             makeIcon: makeIcon,
+            tapePreview: tapePreview,
             icons: ICONS
         },
         installUI: function () {
