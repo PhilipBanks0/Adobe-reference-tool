@@ -11,11 +11,22 @@
 param(
     [switch]$CheckOnly,
     [switch]$Yes,
+    # Started from Acrobat's "Install now": keep the window open at the end.
+    [switch]$FromAcrobat,
     [string]$Repo = 'PhilipBanks0/Adobe-reference-tool',
     [string]$ApiBase = 'https://api.github.com'
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Finish([int]$code) {
+    if ($FromAcrobat) {
+        Write-Host ""
+        if ($code -eq 0) { Write-Host "Restart Acrobat to use the new version." }
+        [void](Read-Host "Press Enter to close this window")
+    }
+    exit $code
+}
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 $ProgressPreference = 'SilentlyContinue'
 $headers = @{ 'User-Agent' = 'ReferenceTool-Updater'; 'Accept' = 'application/vnd.github+json' }
@@ -62,7 +73,7 @@ try {
 } catch {
     Write-Host "Couldn't reach GitHub: $($_.Exception.Message)"
     Write-Host "Check your internet connection, or download the release manually from https://github.com/$Repo/releases"
-    exit 2
+    Finish 2
 }
 
 $latest = ($rel.tag_name -replace '^v', '')
@@ -70,7 +81,7 @@ Write-Host "Latest release:    $latest"
 
 if ($installed -and (Compare-Version $latest $installed) -le 0) {
     Write-Host "You're up to date."
-    exit 0
+    Finish 0
 }
 
 Write-Host ""
@@ -78,16 +89,16 @@ Write-Host "What's new in $($latest):"
 if ($rel.body) { Write-Host ($rel.body.Trim()) } else { Write-Host "  (no release notes)" }
 Write-Host ""
 
-if ($CheckOnly) { exit 10 }
+if ($CheckOnly) { Finish 10 }
 
 if (-not $Yes) {
     $answer = Read-Host "Install version $latest now? (Y/N)"
-    if ($answer -notmatch '^(y|yes)$') { Write-Host "No changes made."; exit 0 }
+    if ($answer -notmatch '^(y|yes)$') { Write-Host "No changes made."; Finish 0 }
 }
 
 $zipAsset = @($rel.assets | Where-Object { $_.name -like 'ReferenceTool-*.zip' }) | Select-Object -First 1
 $sumAsset = @($rel.assets | Where-Object { $_.name -eq 'SHA256SUMS.txt' }) | Select-Object -First 1
-if (-not $zipAsset) { Write-Host "This release has no installer zip attached. Download it manually from $($rel.html_url)"; exit 3 }
+if (-not $zipAsset) { Write-Host "This release has no installer zip attached. Download it manually from $($rel.html_url)"; Finish 3 }
 
 $work = Join-Path ([IO.Path]::GetTempPath()) ("ReferenceTool-update-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
@@ -118,13 +129,13 @@ try {
     $now = Get-InstalledVersion
     if ($now -ne $latest) { throw "Install finished but the installed version is '$now', expected '$latest'." }
     Write-Host "Updated to version $latest."
-    if (Get-Process -Name 'Acrobat', 'AcroRd32' -ErrorAction SilentlyContinue) {
+    if (-not $FromAcrobat -and (Get-Process -Name 'Acrobat', 'AcroRd32' -ErrorAction SilentlyContinue)) {
         Write-Host "Close and reopen Acrobat to start using it."
     }
-    exit 0
+    Finish 0
 } catch {
     Write-Host "Update failed: $($_.Exception.Message)"
-    exit 1
+    Finish 1
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -69,7 +69,7 @@ var ART_privLaunchURL = app.trustedFunction(function (url) {
 var ART_timer = null;
 
 var ARTool = (function () {
-    var VERSION = "0.3.2";
+    var VERSION = "0.3.3";
     var REPO = "PhilipBanks0/Adobe-reference-tool";
     var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
     var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -1382,18 +1382,53 @@ var ARTool = (function () {
         return text.length > max ? text.slice(0, max) + "\n..." : text;
     }
 
+    var UPDATER_URL = "reftool-update:install";
+
+    function isWindows() {
+        try { return /^WIN/i.test(app.platform); } catch (e) { return false; }
+    }
+
+    /** Start the installed Windows updater (registered by the installer). */
+    function launchUpdater() {
+        ART_privLaunchURL(UPDATER_URL);
+    }
+
     function offerUpdate(rel) {
-        var ans = app.alert({
+        var notes = rel.notes ? shorten(rel.notes, 600) + "\n\n" : "";
+        if (isWindows()) {
+            var ans = app.alert({
+                cTitle: "Reference Tool update",
+                nIcon: 2,
+                nType: 2,
+                cMsg: "Version " + rel.version + " is available (you have " + VERSION + ").\n\n" + notes +
+                    "Install it now? The updater downloads and checks the new version, " +
+                    "then Windows asks for permission to install it. " +
+                    "Restart Acrobat when it's done.\n\n" +
+                    "Your open PDFs aren't affected."
+            });
+            if (ans !== 4) { return; }
+            try {
+                launchUpdater();
+                return;
+            } catch (e) {
+                app.alert({
+                    cTitle: "Reference Tool update",
+                    nIcon: 1,
+                    cMsg: "The updater couldn't be started from Acrobat (" + e + ").\n\n" +
+                        "Run \"Update Reference Tool\" from the Start menu instead. The download page will open now."
+                });
+                openReleasesPage(rel.url);
+                return;
+            }
+        }
+        var ans2 = app.alert({
             cTitle: "Reference Tool update",
             nIcon: 2,
             nType: 2,
-            cMsg: "Version " + rel.version + " is available (you have " + VERSION + ").\n\n" +
-                (rel.notes ? shorten(rel.notes, 600) + "\n\n" : "") +
-                "To install it: close Acrobat and run \"Update Reference Tool\" from the Start menu " +
-                "(Windows), or download the new release and run the installer.\n\n" +
+            cMsg: "Version " + rel.version + " is available (you have " + VERSION + ").\n\n" + notes +
                 "Open the download page now?"
         });
-        if (ans === 4) { openReleasesPage(rel.url); }
+        if (ans2 === 4) { openReleasesPage(rel.url); }
     }
 
     function openReleasesPage(url) {

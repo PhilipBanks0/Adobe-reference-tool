@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3 - 2026-09-25
+
+- **One-click updates from Acrobat (Windows).** When a new version is found, click **Yes** and the updater downloads it, checks it against the release's SHA-256 checksum, and installs it. Windows asks for permission once. No more trips to the GitHub page. Restart Acrobat when it's done.
+- The installer registers a small per-user `reftool-update:` link so Acrobat can start the updater; the uninstaller removes it.
+- If Acrobat can't start the updater, it says so and falls back to the Start menu updater and the download page.
+
 ## 0.3.2 - 2026-09-25
 
 - Calc Tape works like an adding machine: type an amount (and a description) in the entry box and press **Enter**. The line goes straight onto the tape and the total updates, with the cursor ready for the next number. Acrobat only refreshes a box when you leave it, so the tape now updates on Enter instead of on every keystroke.

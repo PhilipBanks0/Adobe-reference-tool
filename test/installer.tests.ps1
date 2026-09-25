@@ -150,6 +150,16 @@ try {
     $r = Run (Join-Path $repoRoot 'installer/install.ps1') @('-Quiet', '-NoShortcuts')
     Check "installs from the source folder layout" ($r.code -eq 0 -and (JsVersion (Join-Path $appJs 'ReferenceTool.js')) -eq $current) $r.out
 
+    # ---- Windows: the "reftool-update:" link Acrobat uses (CI only) ------
+    if (($IsWindows -or $PSVersionTable.PSEdition -eq 'Desktop') -and $env:CI) {
+        $r = Run (Join-Path $pkgCur.stage 'install.ps1') @('-Quiet')
+        $cmd = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Classes\reftool-update\shell\open\command').'(default)'
+        Check "registers the Acrobat update link" ($cmd -match 'update\.ps1' -and $cmd -match '-FromAcrobat') $cmd
+        Check "update link is a URL protocol" ($null -ne (Get-ItemProperty -LiteralPath 'HKCU:\Software\Classes\reftool-update').'URL Protocol')
+        $r = Run (Join-Path $appDir 'uninstall.ps1') @('-Quiet')
+        Check "uninstall removes the update link" (-not (Test-Path 'HKCU:\Software\Classes\reftool-update'))
+    }
+
     Remove-Item Env:\REFTOOL_ACROBAT_APP_DIRS
 }
 finally {

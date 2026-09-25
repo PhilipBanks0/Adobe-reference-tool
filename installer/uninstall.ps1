@@ -51,6 +51,8 @@ if ($needAdmin.Count -gt 0) {
     }
 }
 
+try { Remove-Item -Path 'HKCU:\Software\Classes\reftool-update' -Recurse -Force -ErrorAction Stop; Say "  Removed the Acrobat update link" } catch { }
+
 $startDir = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Reference Tool'
 if (Test-Path -LiteralPath $startDir) { Remove-Item -LiteralPath $startDir -Recurse -Force; Say "  Removed Start menu shortcuts" }
 if (Test-Path -LiteralPath $appDir) { Remove-Item -LiteralPath $appDir -Recurse -Force; Say "  Removed $appDir" }

@@ -599,6 +599,28 @@ test("check for updates: newer release offers the download page", () => {
   assert.ok(/releases\/tag\/v9\.0\.0/.test(env.launched[0]));
 });
 
+test("Windows: 'Install now' starts the installed updater, no web page", () => {
+  const env = makeEnv();
+  env.ctx.app.platform = "WIN";
+  env.httpResponse = release("v9.0.0", "New stuff");
+  env.alertAnswers.push(4); // Yes, install now
+  env.ART.run("checkForUpdates", null);
+  assert.ok(/Install it now\?/.test(env.alerts[0]), env.alerts[0]);
+  assert.deepStrictEqual(env.launched, ["reftool-update:install"]);
+});
+
+test("Windows: if the updater can't be started, fall back to Start menu + download page", () => {
+  const env = makeEnv();
+  env.ctx.app.platform = "WIN";
+  env.httpResponse = release("v9.0.0");
+  let first = true;
+  env.ctx.app.launchURL = u => { if (first) { first = false; throw new Error("blocked"); } env.launched.push(u); };
+  env.alertAnswers.push(4, 4);
+  env.ART.run("checkForUpdates", null);
+  assert.ok(env.alerts.some(a => /Start menu/.test(a)));
+  assert.ok(/releases\/tag\/v9\.0\.0/.test(env.launched[0]));
+});
+
 test("check for updates: up to date", () => {
   const env = makeEnv();
   env.httpResponse = release("v" + env.ART.version);

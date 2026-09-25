@@ -182,6 +182,23 @@ $info = [ordered]@{
 }
 $info | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $appDir 'installed.json') -Encoding UTF8
 
+# --- "reftool-update:" link, so Acrobat can start the updater ----------------
+# Per-user (HKCU), no admin needed. Acrobat's "Install now" opens this link.
+if (-not $NoShortcuts) {
+    try {
+        $key = 'HKCU:\Software\Classes\reftool-update'
+        New-Item -Path "$key\shell\open\command" -Force | Out-Null
+        Set-ItemProperty -Path $key -Name '(default)' -Value 'URL:Reference Tool updater'
+        Set-ItemProperty -Path $key -Name 'URL Protocol' -Value ''
+        $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $cmd = '"' + $ps + '" -NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $appDir 'update.ps1') + '" -Yes -FromAcrobat'
+        Set-ItemProperty -Path "$key\shell\open\command" -Name '(default)' -Value $cmd
+        Say "  Registered the updater so Acrobat can start it"
+    } catch {
+        Say "  (Could not register the Acrobat update link: $($_.Exception.Message))"
+    }
+}
+
 # --- Start menu shortcuts ----------------------------------------------------
 if (-not $NoShortcuts) {
     try {

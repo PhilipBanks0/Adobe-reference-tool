@@ -51,7 +51,12 @@ If the menu doesn't show up, go to *Preferences → JavaScript* and tick *Enable
 
 ## Updating
 
-- **In Acrobat:** *Menu → Reference Tool → Check for Updates*. Acrobat also checks quietly about once a week after it starts, and pops up only when there's a new version. To turn the automatic check off, set `autoUpdateCheck: false` in the settings. Acrobat may ask once whether it may connect to `api.github.com`; allow it.
+- **In Acrobat:** *Menu → Reference Tool → Check for Updates*. Acrobat also checks quietly about once a week after it starts. When there's a new version, click **Yes**:
+  1. the updater downloads it,
+  2. checks it against the release's SHA-256 checksums,
+  3. installs it (Windows asks for permission once).
+
+  Restart Acrobat when it's done. The first time, Acrobat may ask whether it can open the `reftool-update` link or connect to `api.github.com`; allow it. To turn the weekly check off, set `autoUpdateCheck: false` in the settings.
 - **Windows:** close Acrobat and run *Start menu → Reference Tool → Update Reference Tool*. It:
   1. shows what's new,
   2. downloads the release,
