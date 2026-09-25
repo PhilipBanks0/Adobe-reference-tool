@@ -44,11 +44,20 @@ function makeEnv(menuParents) {
       this._links = this._links.filter(l => !(l.page === p && l.rect[0] >= r[0] && l.rect[1] >= r[1] && l.rect[2] <= r[2] && l.rect[3] <= r[3]));
     }
     addField(name, type, p, box) {
-      const f = { name, page: p, box, setAction(ev, s) { this.script = s; } };
-      this._fields[name] = f; return f;
+      let f = this._fields[name];
+      if (!f) {
+        f = { name, widgets: [], caption: "", setAction(ev, s) { this.script = s; }, buttonSetCaption(c) { this.caption = c; } };
+        this._fields[name] = f;
+      }
+      f.widgets.push({ page: p, box });
+      f.page = f.widgets.length === 1 ? p : f.widgets.map(w => w.page);
+      return f;
     }
     getField(n) { return this._fields[n] || null; }
-    removeField(n) { delete this._fields[n]; }
+    removeField(n) { for (const k of Object.keys(this._fields)) if (k === n || k.indexOf(n + ".") === 0) delete this._fields[k]; }
+    get numFields() { return Object.keys(this._fields).length; }
+    getNthFieldName(i) { return Object.keys(this._fields)[i]; }
+    fieldNames() { return Object.keys(this._fields).sort(); }
     getPageBox(t, p) { const r = this._rot[p] || 0; return (r === 90 || r === 270) ? [0, 612, 792, 0] : [0, 792, 612, 0]; } // rotated user space, like Acrobat
     getPageRotation(p) { return this._rot[p] || 0; }
     replacePages(o) {
@@ -58,15 +67,23 @@ function makeEnv(menuParents) {
       this._replaced = o;
     }
     scroll() {}
-    // helper: simulate a user click on the capture field
-    click(x, y) {
-      const f = this._fields.ART_CAPTURE;
-      assert(f, "capture field should exist");
-      const self = this;
+    // helper: simulate a user click on the page (the capture field over it)
+    click(x, y, page) {
+      if (page === undefined) page = this.pageNum;
+      const f = this._fields["ART_CAP.p" + page];
+      assert(f, "capture field should exist on page " + page);
       const fn = new (vm.runInContext("Function", ctx))("event", f.script.replace(/this\.mouseX/g, x).replace(/this\.mouseY/g, y));
-      fn.call(self, { target: { page: f.page } });
+      fn.call(this, { target: f });
       runTimers();
     }
+    // helper: click a button on the reference options bar
+    bar(id) {
+      const f = this._fields["ART_BAR." + id];
+      assert(f, "bar button " + id + " should exist");
+      new (vm.runInContext("Function", ctx))("event", f.script).call(this, { target: f });
+      runTimers();
+    }
+    status() { const f = this._fields["ART_BAR.status"]; return f ? f.caption : null; }
   }
 
   let ctx;
@@ -81,9 +98,9 @@ function makeEnv(menuParents) {
     execDialog(d) {
       env.dialogs.push(d);
       const loaded = {};
-      const res = env.dialogResults.shift();
-      if (res === undefined) throw new Error("unexpected dialog");
-      const dlg = { load(o) { Object.assign(loaded, o); }, store() { return Object.assign({}, loaded, typeof res === "object" ? res : {}); } };
+      let res = env.dialogResults.shift();
+      if (res === undefined) res = {}; // accept the dialog as shown
+      const dlg = { enable() {}, load(o) { Object.assign(loaded, o); }, store() { return Object.assign({}, loaded, typeof res === "object" ? res : {}); } };
       if (d.initialize) d.initialize(dlg);
       if (d.prvw) d.prvw(dlg);
       env.lastPreview = loaded.prev;
@@ -99,14 +116,14 @@ function makeEnv(menuParents) {
       if (env.menuParents && env.menuParents.indexOf(o.cParent) < 0) throw new TypeError("Invalid argument type.");
       (env.submenus = env.submenus || []).push(o.cParent);
     },
-    addMenuItem(o) { (env.menuItems = env.menuItems || []).push(o.cUser); }, addToolButton(o) { (env.buttons = env.buttons || []).push(o.cLabel); }
+    addMenuItem(o) { (env.menuItems = env.menuItems || []).push(o.cUser); }, addToolButton(o) { (env.buttons = env.buttons || []).push(o.cLabel); (env.buttonObjs = env.buttonObjs || []).push(o); }
   };
   function runTimers() { while (env.timers.length) vm.runInContext(env.timers.shift(), ctx); }
 
   ctx = vm.createContext({
     app, JSON, Math, Date, String, Number, Array, Object, RegExp, Error, parseInt, parseFloat,
     color: { blue: ["RGB", 0, 0, 1], transparent: ["T"] },
-    border: { d: "dashed" }, highlight: { n: "none" }, display: { noPrint: 3 },
+    border: { d: "dashed", s: "solid" }, highlight: { n: "none", p: "push" }, display: { noPrint: 3 },
     global: { setPersistent() {} },
     console: { println: console.log },
     Net: { HTTP: { request(o) {
@@ -130,19 +147,26 @@ function test(name, fn) {
   catch (e) { console.log("  FAIL " + name + "\n       " + (e.stack || e)); process.exitCode = 1; }
 }
 const names = d => d._annots.map(a => a.name).sort();
+// Place one or more reference pairs with the Reference tool: [[page, x, y], [page, x, y]], ...
+function refPairs(env, doc, clicks, opts) {
+  env.dialogResults.push(opts || {});
+  env.ART.run("placeTag", doc);            // start (options dialog accepted)
+  for (const c of clicks) doc.click(c[1], c[2], c[0]);
+  env.ART.run("placeTag", doc);            // finish
+}
 const followLink = (env, doc, link) => { new (vm.runInContext("Function", env.ctx))(link.action).call(doc); return doc.pageNum; };
 
 console.log("Reference Tool tests");
 
 test("toolbar buttons install", () => {
   const env = makeEnv();
-  assert.deepStrictEqual(env.buttons, ["Place Tag", "Calc Tape", "Tag Check", "Replace Page", "Repair Tags"]);
+  assert.deepStrictEqual(env.buttons, ["Reference", "Calc Tape", "Tag Check", "Replace Page", "Repair Tags"]);
 });
 
 test("menu goes under the new Acrobat 'Menu', falling back to Edit on classic Acrobat", () => {
   let env = makeEnv();
   assert.strictEqual(env.ART.menuParent, "AV2::HamburgerMenu");
-  assert.ok(env.menuItems.indexOf("Place Tag") >= 0 && env.menuItems.indexOf("Check for Updates") >= 0);
+  assert.ok(env.menuItems.indexOf("Reference Tool") >= 0 && env.menuItems.indexOf("Check for Updates") >= 0);
   // classic UI: no hamburger menu
   env = (function () { const e = makeEnvWith(["Edit", "Tools", "Help"]); return e; })();
   assert.strictEqual(env.ART.menuParent, "Edit");
@@ -187,74 +211,151 @@ test("tape formatting lines up", () => {
   assert.ok(numCols.every(c => c === numCols[0]), "number column aligned: " + numCols);
 });
 
-test("place tag pair by clicking, links jump both ways", () => {
+test("reference mode: click, click, click - numbers run on without prompts", () => {
   const env = makeEnv(); const doc = new env.Doc(20);
-  env.responses.push("A-1");
   env.ART.run("placeTag", doc);
-  doc.click(300, 400);
-  let reg = JSON.parse(doc.info.ARTRegister);
-  assert.strictEqual(reg.pending, "A-1");
-  assert.strictEqual(doc.getField("ART_CAPTURE"), null, "capture field removed");
-  doc.pageNum = 13;
-  env.alertAnswers.push(4); // yes, place the match
-  env.ART.run("placeTag", doc);
-  doc.click(100, 200);
-  reg = JSON.parse(doc.info.ARTRegister);
+  assert.strictEqual(env.dialogs.length, 1, "options panel shown on start");
+  assert.ok(doc.getField("ART_CAP.p0") && doc.getField("ART_CAP.p19"), "capture on every page");
+  assert.ok(/A-1 .*click the figure/.test(doc.status()), doc.status());
+  const promptsBefore = env.alerts.length + env.responses.length;
+  doc.click(300, 400, 0);
+  assert.ok(/A-1 .*match/.test(doc.status()), doc.status());
+  doc.click(100, 200, 13);                // match on another page, no prompt
+  assert.ok(/A-2 .*figure/.test(doc.status()), doc.status());
+  doc.click(310, 380, 0);
+  doc.click(120, 220, 14);
+  assert.ok(/A-3/.test(doc.status()));
+  assert.strictEqual(env.dialogs.length, 1, "no more dialogs while placing");
+  env.ART.run("placeTag", doc);           // finish
+  assert.strictEqual(doc.fieldNames().length, 0, "all capture/bar fields removed");
+  assert.deepStrictEqual(names(doc), ["ART:T:A-1:1", "ART:T:A-1:2", "ART:T:A-2:1", "ART:T:A-2:2"]);
+  const reg = JSON.parse(doc.info.ARTRegister);
   assert.strictEqual(reg.pending, null);
-  assert.strictEqual(reg.next, 2);
-  assert.deepStrictEqual(names(doc), ["ART:T:A-1:1", "ART:T:A-1:2"]);
-  assert.strictEqual(doc._links.length, 2);
-  const s1 = doc._annots.find(a => a.name.endsWith(":1"));
-  assert.strictEqual(s1.page, 0);
+  assert.strictEqual(reg.next, 3);
+  const s1 = doc._annots.find(a => a.name === "ART:T:A-1:1");
   assert.ok(s1.rect[0] < 300 && s1.rect[2] > 300 && s1.rect[1] < 400 && s1.rect[3] > 400, "tag centred on click");
   assert.strictEqual(s1.readOnly, true);
-  const l1 = doc._links.find(l => l.page === 0);
+  const l1 = doc._links.find(l => l.page === 0 && l.rect[0] < 300 && l.rect[2] > 300);
   const l2 = doc._links.find(l => l.page === 13);
   doc.pageNum = 5; assert.strictEqual(followLink(env, doc, l1), 13);
   assert.strictEqual(followLink(env, doc, l2), 0);
 });
 
+test("reference mode picks up the sequence next time", () => {
+  const env = makeEnv(); const doc = new env.Doc(5);
+  refPairs(env, doc, [[0, 10, 10], [1, 10, 10]]);
+  env.ART.run("placeTag", doc);
+  assert.ok(/^A-2/.test(doc.status()), doc.status());
+  const dlgInit = {}; env.dialogs[1].initialize({ load(o) { Object.assign(dlgInit, o); }, enable() {} });
+  assert.strictEqual(dlgInit.next, "A-2", "options panel suggests the next number");
+});
+
+test("finishing with a half-placed pair resumes at its match", () => {
+  const env = makeEnv(); const doc = new env.Doc(5);
+  refPairs(env, doc, [[0, 10, 10]]);
+  assert.ok(env.alerts.some(a => /A-1 doesn't have its match yet/.test(a)));
+  env.ART.run("placeTag", doc);
+  assert.ok(/A-1 .*match/.test(doc.status()), doc.status());
+  doc.click(50, 50, 3);
+  env.ART.run("placeTag", doc);
+  assert.deepStrictEqual(names(doc), ["ART:T:A-1:1", "ART:T:A-1:2"]);
+});
+
+test("options panel: choose start number, colour and size", () => {
+  const env = makeEnv(); const doc = new env.Doc(5);
+  refPairs(env, doc, [[0, 100, 100], [1, 100, 100]], { next: "B-10", colr: { Red: -1, Blue: 1, Green: -1, Black: -1 }, size: { Small: -1, Medium: -1, Large: 1 } });
+  assert.deepStrictEqual(names(doc), ["ART:T:B-10:1", "ART:T:B-10:2"]);
+  const t = doc._annots[0];
+  assert.strictEqual(t.textSize, 10, "large");
+  assert.strictEqual(JSON.stringify(t.strokeColor), JSON.stringify(["RGB", 0, 0.25, 0.75]), "blue");
+  env.ART.run("placeTag", doc);
+  assert.ok(/^B-11/.test(doc.status()), "sequence continues from B-10");
+});
+
+test("options panel can be switched off; bar Options still opens it", () => {
+  const env = makeEnv(); const doc = new env.Doc(3);
+  env.dialogResults.push({ show: false });
+  env.ART.run("placeTag", doc); env.ART.run("placeTag", doc);
+  const n = env.dialogs.length;
+  env.ART.run("placeTag", doc);
+  assert.strictEqual(env.dialogs.length, n, "starts straight away");
+  doc.bar("opts");
+  assert.strictEqual(env.dialogs.length, n + 1);
+});
+
+test("duplicate start number is refused", () => {
+  const env = makeEnv(); const doc = new env.Doc(5);
+  refPairs(env, doc, [[0, 10, 10], [1, 10, 10]]);
+  env.dialogResults.push({ next: "A-1" }, "cancel");
+  env.ART.run("placeTag", doc);
+  assert.ok(env.alerts.some(a => /A-1 is already used/.test(a)));
+  assert.strictEqual(doc.fieldNames().length, 0, "didn't start");
+});
+
+test("bar: Undo removes the last tag and steps back", () => {
+  const env = makeEnv(); const doc = new env.Doc(5);
+  env.ART.run("placeTag", doc);
+  doc.click(10, 10, 0); doc.click(20, 20, 1); doc.click(30, 30, 0);   // A-1 pair + A-2 side 1
+  doc.bar("undo");
+  assert.ok(/A-2 .*figure/.test(doc.status()), doc.status());
+  assert.deepStrictEqual(names(doc), ["ART:T:A-1:1", "ART:T:A-1:2"]);
+  doc.bar("undo");
+  assert.ok(/A-1 .*match/.test(doc.status()), doc.status());
+  assert.deepStrictEqual(names(doc), ["ART:T:A-1:1"]);
+  assert.strictEqual(doc._links.filter(l => l.page === 1).length, 0, "link removed too");
+  doc.click(40, 40, 2);
+  assert.deepStrictEqual(names(doc), ["ART:T:A-1:1", "ART:T:A-1:2"]);
+});
+
+test("bar: Done finishes and cleans up", () => {
+  const env = makeEnv(); const doc = new env.Doc(4);
+  env.ART.run("placeTag", doc);
+  assert.strictEqual(env.ART.isActive(), true);
+  doc.bar("done");
+  assert.strictEqual(env.ART.isActive(), false);
+  assert.strictEqual(doc.fieldNames().length, 0);
+});
+
+test("bar sits at the top of each page", () => {
+  const env = makeEnv(); const doc = new env.Doc(3);
+  env.ART.run("placeTag", doc);
+  const st = doc.getField("ART_BAR.status");
+  assert.strictEqual(st.widgets.length, 3, "one on each page");
+  assert.ok(st.widgets[0].box[1] <= 792 && st.widgets[0].box[1] > 770, "near the top");
+  ["undo", "opts", "done"].forEach(id => assert.ok(doc.getField("ART_BAR." + id)));
+});
+
 test("links still work after pages are reordered", () => {
   const env = makeEnv(); const doc = new env.Doc(20);
-  env.responses.push("A-1"); env.ART.run("placeTag", doc); doc.click(300, 400);
-  doc.pageNum = 10; env.ART.run("placeTag", doc); doc.click(100, 100);
-  // simulate moving page 10 to page 2
+  refPairs(env, doc, [[0, 300, 400], [10, 100, 100]]);
   doc._annots.forEach(a => { if (a.page === 10) a.page = 2; });
   doc._links.forEach(l => { if (l.page === 10) l.page = 2; });
   const l1 = doc._links.find(l => l.page === 0);
   assert.strictEqual(followLink(env, doc, l1), 2);
 });
 
-test("next label auto-increments", () => {
-  const env = makeEnv(); const doc = new env.Doc(5);
-  env.responses.push("A-1"); env.ART.run("placeTag", doc); doc.click(10, 10);
-  doc.pageNum = 1; env.ART.run("placeTag", doc); doc.click(10, 10);
-  let asked = null;
-  env.ctx.app.response = o => { asked = o.cDefault; return null; };
-  env.ART.run("placeTag", doc);
-  assert.strictEqual(asked, "A-2");
+test("leftover capture fields from a crash are cleaned up", () => {
+  const env = makeEnv(); const doc = new env.Doc(2);
+  doc.addField("ART_CAP.p0", "button", 0, [0, 792, 612, 0]).setAction("MouseUp", "ARTool._onCapture(this,0,1,1)");
+  doc.addField("ART_BAR.status", "button", 0, [0, 792, 100, 780]);
+  doc.click(5, 5, 0);                     // stray click: no session
+  assert.strictEqual(doc.fieldNames().length, 0);
+  assert.strictEqual(doc._annots.length, 0);
 });
 
-test("duplicate labels are refused", () => {
-  const env = makeEnv(); const doc = new env.Doc(5);
-  env.responses.push("A-1"); env.ART.run("placeTag", doc); doc.click(10, 10);
-  env.alertAnswers.push(3); // No: leave unmatched, start new
-  env.responses.push("A-1");
-  env.ART.run("placeTag", doc);
-  assert.ok(env.alerts.some(a => /already in use/.test(a)));
-  assert.strictEqual(doc.getField("ART_CAPTURE"), null);
-});
-
-test("selected rectangle comment places tag beside it", () => {
-  const env = makeEnv(); const doc = new env.Doc(5);
-  const box = doc.addAnnot({ type: "Square", page: 2, rect: [100, 100, 160, 115], name: "userbox" });
-  doc.selectedAnnots = [box];
-  env.responses.push("B-1");
-  env.ART.run("placeTag", doc);
-  const t = doc._annots.find(a => a.name === "ART:T:B-1:1");
-  assert.ok(t && t.page === 2 && t.rect[0] >= 160, "tag to the right of the box");
-  assert.strictEqual(doc.getField("ART_CAPTURE"), null, "no capture needed");
-  assert.ok(doc._annots.includes(box), "user's rectangle kept");
+test("toolbar buttons have icons; Reference button shows when active", () => {
+  const env = makeEnv();
+  const ref = env.buttonObjs.find(b => b.cName === "ARTBtn_placeTag");
+  assert.strictEqual(ref.cLabel, "Reference");
+  assert.ok(/isActive/.test(ref.cMarked));
+  env.buttonObjs.forEach(b => {
+    assert.ok(b.oIcon, "icon for " + b.cName);
+    assert.strictEqual(b.oIcon.width, 20);
+    const hex = b.oIcon.read(20 * 20 * 4);
+    assert.strictEqual(hex.length, 20 * 20 * 8, "full 20x20 ARGB icon for " + b.cName);
+  });
+  Object.keys(env.ART._internal.icons).forEach(k => env.ART._internal.icons[k].forEach((row, i) =>
+    assert.strictEqual(row.length, 20, k + " row " + i)));
 });
 
 test("calc tape posts a monospaced comment where clicked", () => {
@@ -294,9 +395,7 @@ test("tapes from combined files are adopted into the register", () => {
 
 test("tag check flags unmatched and broken tags", () => {
   const env = makeEnv(); const doc = new env.Doc(10);
-  env.responses.push("A-1"); env.ART.run("placeTag", doc); doc.click(10, 10);
-  doc.pageNum = 4; env.ART.run("placeTag", doc); doc.click(10, 10);
-  env.alertAnswers.push(3); env.responses.push("A-2"); env.ART.run("placeTag", doc); doc.click(50, 50); // A-2 unmatched
+  refPairs(env, doc, [[0, 10, 10], [4, 10, 10], [4, 50, 50]]); // A-2 unmatched
   // A-1 side 2 deleted outside the tool
   doc._annots.find(a => a.name === "ART:T:A-1:2").destroy();
   let loaded = null;
@@ -310,8 +409,8 @@ test("tag check flags unmatched and broken tags", () => {
 
 test("repair restores tags and tapes lost to Acrobat's own Replace Pages", () => {
   const env = makeEnv(); const doc = new env.Doc(10);
-  env.responses.push("A-1"); env.ART.run("placeTag", doc); doc.click(200, 300);
-  doc.pageNum = 6; env.ART.run("placeTag", doc); doc.click(220, 330);
+  refPairs(env, doc, [[0, 200, 300], [6, 220, 330]]);
+  doc.pageNum = 6;
   env.dialogResults.push({ titl: "t", ents: "1\n2", init: "" }); env.ART.run("calcTape", doc); doc.click(50, 500);
   const before = doc._annots.map(a => ({ n: a.name, r: a.rect.slice(), p: a.page, c: a.contents }));
   // Native replace of page 6 wipes everything on it
@@ -340,8 +439,7 @@ test("repair 'No' forgets deleted items instead of restoring", () => {
 
 test("repair is idempotent (no duplicate links)", () => {
   const env = makeEnv(); const doc = new env.Doc(3);
-  env.responses.push("A-1"); env.ART.run("placeTag", doc); doc.click(20, 20);
-  doc.pageNum = 1; env.ART.run("placeTag", doc); doc.click(20, 20);
+  refPairs(env, doc, [[0, 20, 20], [1, 20, 20]]);
   env.ART.run("repairTags", doc); env.ART.run("repairTags", doc);
   assert.strictEqual(doc._links.length, 2);
   assert.strictEqual(doc._annots.length, 2);
@@ -349,8 +447,8 @@ test("repair is idempotent (no duplicate links)", () => {
 
 test("Replace Page (Keep Tags) keeps tags, tapes and optionally other comments", () => {
   const env = makeEnv(); const doc = new env.Doc(10);
-  env.responses.push("C-1"); env.ART.run("placeTag", doc); doc.click(100, 100);
-  doc.pageNum = 3; env.ART.run("placeTag", doc); doc.click(120, 140);
+  refPairs(env, doc, [[0, 100, 100], [3, 120, 140]], { next: "C-1" });
+  doc.pageNum = 3;
   env.dialogResults.push({ titl: "t", ents: "1\n2", init: "" }); env.ART.run("calcTape", doc); doc.click(300, 600);
   doc.addAnnot({ type: "Text", page: 3, rect: [10, 10, 30, 30], name: "reviewnote", contents: "Please update" });
   const before = names(doc);
@@ -372,8 +470,8 @@ test("Replace Page (Keep Tags) keeps tags, tapes and optionally other comments",
 
 test("Move Tag moves the tag and its link", () => {
   const env = makeEnv(); const doc = new env.Doc(4);
-  env.responses.push("A-1"); env.ART.run("placeTag", doc); doc.click(100, 100);
-  doc.pageNum = 2; env.ART.run("placeTag", doc); doc.click(100, 100);
+  refPairs(env, doc, [[0, 100, 100], [2, 100, 100]]);
+  doc.pageNum = 2;
   env.responses.push("A-1");
   env.ART.run("moveTag", doc);
   doc.click(400, 500);
@@ -386,8 +484,7 @@ test("Move Tag moves the tag and its link", () => {
 
 test("Delete Tag removes both sides and links", () => {
   const env = makeEnv(); const doc = new env.Doc(4);
-  env.responses.push("A-1"); env.ART.run("placeTag", doc); doc.click(100, 100);
-  doc.pageNum = 2; env.ART.run("placeTag", doc); doc.click(100, 100);
+  refPairs(env, doc, [[0, 100, 100], [2, 100, 100]]);
   env.responses.push("A-1"); env.alertAnswers.push(4);
   env.ART.run("deleteTag", doc);
   assert.strictEqual(doc._annots.length, 0);
@@ -396,19 +493,10 @@ test("Delete Tag removes both sides and links", () => {
   assert.strictEqual(doc._annots.length, 0, "repair doesn't resurrect deleted tags");
 });
 
-test("clicking Place Tag again cancels click mode", () => {
-  const env = makeEnv(); const doc = new env.Doc(2);
-  env.responses.push("A-1"); env.ART.run("placeTag", doc);
-  assert.ok(doc.getField("ART_CAPTURE"));
-  env.ART.run("placeTag", doc);
-  assert.strictEqual(doc.getField("ART_CAPTURE"), null);
-  assert.strictEqual(doc._annots.length, 0);
-});
 
 test("protected (certified/secured) PDF gets a plain-English explanation", () => {
   const env = makeEnv(); const doc = new env.Doc(2);
   doc.addField = () => { const e = new Error("Security settings prevent access to this property or method."); e.name = "NotAllowedError"; throw e; };
-  env.responses.push("A-1");
   env.ART.run("placeTag", doc);
   const msg = env.alerts[env.alerts.length - 1];
   assert.ok(/This PDF is protected/.test(msg) && /Combine Files/.test(msg), msg);
@@ -427,7 +515,6 @@ test("errors are caught and shown, not thrown", () => {
   doc.getAnnots = () => { throw new Error("boom"); };
   doc.syncAnnotScan = () => { throw new Error("boom"); };
   doc.addField = () => { throw new Error("cannot add field"); };
-  env.responses.push("A-1");
   env.ART.run("placeTag", doc);
   assert.ok(env.alerts.some(a => /Reference Tool error/.test(a)));
 });

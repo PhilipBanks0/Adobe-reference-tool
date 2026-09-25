@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 - 2026-09-25
+
+- **Reference mode.** Click **Reference** (toolbar or Menu → Reference Tool), then click a figure and click its match on any page. The next number follows automatically (A-1, A-2, …); there are no prompts between clicks.
+- **Options panel** when you start: next reference number, tag colour (red, blue, green, black) and size. Untick "Show these options each time" to skip it.
+- **Options bar** at the top of every page while you're referencing: what the next click places, **Undo**, **Options** and **Done**. The bar doesn't print and disappears when you finish.
+- Finishing with half a pair (a figure with no match yet) picks up at its match next time.
+- Toolbar buttons now have icons, and the Reference button shows as pressed while reference mode is on.
+
 ## 0.2.2 - 2026-09-24
 
 - Protected PDFs (certified, digitally signed or secured) now get a plain explanation and what to do, instead of a raw "NotAllowedError: Security settings prevent access" message. Acrobat doesn't allow tags or tapes on those files; combine them into the work paper or print them to PDF first.

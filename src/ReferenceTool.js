@@ -5,9 +5,9 @@
  * JavaScripts folder (see README.md) and restart Acrobat.
  *
  * Features
- *   - Place Tag    : paired reference tags (e.g. A-1 on the financial
- *                    statements <-> A-1 on the support). Clicking either
- *                    tag jumps to its match. The jump works in any copy of
+ *   - Reference    : click a figure, then its match; numbers run on
+ *                    automatically (A-1, A-2, ...). Clicking either tag
+ *                    jumps to its match. The jump works in any copy of
  *                    Acrobat / Reader, even without this add-on installed.
  *   - Calc Tape    : a calculator whose tape is posted onto the PDF as a
  *                    comment for the reviewer.
@@ -69,7 +69,7 @@ var ART_privLaunchURL = app.trustedFunction(function (url) {
 var ART_timer = null;
 
 var ARTool = (function () {
-    var VERSION = "0.2.2";
+    var VERSION = "0.3.0";
     var REPO = "PhilipBanks0/Adobe-reference-tool";
     var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
     var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -392,8 +392,9 @@ var ARTool = (function () {
     // Building tags, links and tapes
     // -----------------------------------------------------------------------
     function tagSize(label) {
-        var h = cfg.tagFontSize + 6;
-        var w = Math.max(20, label.length * cfg.tagFontSize * 0.62 + 10);
+        var fs = TAG_SIZES[currentStyle().size] || cfg.tagFontSize;
+        var h = fs + 6;
+        var w = Math.max(20, label.length * fs * 0.62 + 10);
         return [w, h];
     }
 
@@ -437,7 +438,10 @@ var ARTool = (function () {
         reg.items[annot.name] = item;
     }
 
-    function addTag(doc, reg, label, side, page, rect) {
+    function addTag(doc, reg, label, side, page, rect, style) {
+        style = style || { color: "Red", size: "Medium" };
+        var colr = TAG_COLORS[style.color] || TAG_COLORS.Red;
+        var fontSize = TAG_SIZES[style.size] || cfg.tagFontSize;
         rect = clampRect(doc, page, rect);
         var a = doc.addAnnot({
             type: "FreeText",
@@ -447,18 +451,18 @@ var ARTool = (function () {
             author: "Reference Tool",
             subject: "Reference tag",
             contents: label,
-            fillColor: cfg.tagFill,
-            strokeColor: cfg.tagBorder,
+            fillColor: colr.fill,
+            strokeColor: colr.text,
             width: 0.75,
             textFont: "Helvetica-Bold",
-            textSize: cfg.tagFontSize,
+            textSize: fontSize,
             alignment: 1
         });
         try {
             var sp = {};
             sp.text = label;
-            sp.textColor = cfg.tagText;
-            sp.textSize = cfg.tagFontSize;
+            sp.textColor = colr.text;
+            sp.textSize = fontSize;
             sp.fontWeight = 700;
             sp.alignment = "center";
             a.richContents = [sp];
@@ -466,7 +470,7 @@ var ARTool = (function () {
         try { a.print = true; } catch (e2) {}
         // Read-only so clicks pass through to the link underneath.
         try { a.readOnly = true; } catch (e3) {}
-        reg.items[a.name] = { kind: "tag", label: label, side: side, page: page, rect: copyRect(a.rect) };
+        reg.items[a.name] = { kind: "tag", label: label, side: side, page: page, rect: copyRect(a.rect), style: style };
         rebuildLink(doc, a, reg);
         return a;
     }
@@ -512,7 +516,7 @@ var ARTool = (function () {
     /** Re-create a tag or tape from its register entry. */
     function restoreItem(doc, reg, name, item, page) {
         var pg = (page === undefined) ? item.page : page;
-        if (item.kind === "tag") { return addTag(doc, reg, item.label, item.side, pg, item.rect); }
+        if (item.kind === "tag") { return addTag(doc, reg, item.label, item.side, pg, item.rect, item.style); }
         return addTape(doc, reg, pg, item.rect, item.contents, name);
     }
 
@@ -526,57 +530,157 @@ var ARTool = (function () {
     }
 
     // -----------------------------------------------------------------------
-    // Click capture: a temporary transparent button covering the page
-    // records where the user clicks, then removes itself.
+    // Click capture. Transparent buttons laid over the page(s) record where
+    // the user clicks. Reference mode also puts a small options bar at the
+    // top of every page: status, Undo, Options and Done.
     // -----------------------------------------------------------------------
-    function removeCaptureField(doc) {
-        try { if (doc.getField(CAPTURE_FIELD)) { doc.removeField(CAPTURE_FIELD); } } catch (e) {}
+    var CAP = "ART_CAP";
+    var BAR = "ART_BAR";
+
+    function fieldNames(doc) {
+        var out = [];
+        try {
+            for (var i = 0; i < doc.numFields; i++) { out.push(doc.getNthFieldName(i)); }
+        } catch (e) {}
+        return out;
     }
+
+    /** Remove every capture/bar field (also leftovers from a crash or an older version). */
+    function removeCaptureFields(doc) {
+        if (!doc) { return; }
+        var names = fieldNames(doc);
+        var roots = [CAPTURE_FIELD, CAP, BAR];
+        for (var i = 0; i < names.length; i++) {
+            for (var r = 0; r < roots.length; r++) {
+                if (names[i] === roots[r] || names[i].indexOf(roots[r] + ".") === 0) {
+                    try { doc.removeField(names[i]); } catch (e) {}
+                }
+            }
+        }
+        for (var k = 0; k < roots.length; k++) {
+            try { if (doc.getField(roots[k])) { doc.removeField(roots[k]); } } catch (e2) {}
+        }
+    }
+
+    function removeCaptureField(doc) { removeCaptureFields(doc); }
 
     function cancelCapture(doc) {
-        removeCaptureField(doc);
-        if (capture && capture.doc !== doc) { removeCaptureField(capture.doc); }
+        var old = capture;
         capture = null;
+        removeCaptureFields(doc);
+        if (old && old.doc !== doc) { removeCaptureFields(old.doc); }
     }
 
-    function startCapture(doc, mode, data, tipKey, tipMsg) {
-        cancelCapture(doc);
-        var p = doc.pageNum;
-        var box = doc.getPageBox("Crop", p);
-        var f = doc.addField(CAPTURE_FIELD, "button", p, box);
+    function styleButton(f, frame) {
         try { f.borderStyle = border.d; } catch (e) {}
-        try { f.lineWidth = 2; } catch (e2) {}
-        try { f.strokeColor = color.blue; } catch (e3) {}
+        try { f.lineWidth = frame ? 1 : 0; } catch (e2) {}
+        try { f.strokeColor = frame ? color.blue : color.transparent; } catch (e3) {}
         try { f.fillColor = color.transparent; } catch (e4) {}
         try { f.highlight = highlight.n; } catch (e5) {}
         try { f.display = display.noPrint; } catch (e6) {}
-        try { f.userName = "Click to place (Reference Tool)"; } catch (e7) {}
+    }
+
+    function addCaptureOnPage(doc, p) {
+        var f = doc.addField(CAP + ".p" + p, "button", p, doc.getPageBox("Crop", p));
+        styleButton(f, true);
+        try { f.userName = "Click to place (Reference Tool)"; } catch (e) {}
         f.setAction("MouseUp",
-            "if(typeof ARTool!=='undefined'){ARTool._onCapture(this,event.target.page,this.mouseX,this.mouseY);}" +
-            "else{try{this.removeField('" + CAPTURE_FIELD + "');}catch(e){}}");
-        capture = { doc: doc, page: p, mode: mode, data: data };
+            "if(typeof ARTool!=='undefined'){ARTool._onCapture(this," + p + ",this.mouseX,this.mouseY);}");
+    }
+
+    var BAR_BUTTONS = [
+        { id: "status", w: 190, tip: "Reference Tool: what the next click places. Click to change options." },
+        { id: "undo", w: 40, caption: "Undo", tip: "Remove the last tag placed" },
+        { id: "opts", w: 52, caption: "Options", tip: "Next number, colour and size" },
+        { id: "done", w: 40, caption: "Done", tip: "Stop placing references" }
+    ];
+
+    function addBarOnPage(doc, p) {
+        var box = doc.getPageBox("Crop", p); // rotated space [left, top, right, bottom]
+        var left = Math.min(box[0], box[2]) + 6;
+        var top = Math.max(box[1], box[3]) - 4;
+        var h = 16;
+        var x = left;
+        for (var i = 0; i < BAR_BUTTONS.length; i++) {
+            var b = BAR_BUTTONS[i];
+            var f = doc.addField(BAR + "." + b.id, "button", p, [x, top, x + b.w, top - h]);
+            try { f.borderStyle = border.s; } catch (e) {}
+            try { f.lineWidth = 1; } catch (e1) {}
+            try { f.strokeColor = ["RGB", 0.2, 0.35, 0.6]; } catch (e2) {}
+            try { f.fillColor = b.id === "status" ? ["RGB", 1, 0.97, 0.8] : ["RGB", 0.9, 0.93, 0.98]; } catch (e3) {}
+            try { f.textSize = 8; } catch (e4) {}
+            try { f.textColor = ["RGB", 0.1, 0.1, 0.1]; } catch (e5) {}
+            try { f.highlight = highlight.p; } catch (e6) {}
+            try { f.display = display.noPrint; } catch (e7) {}
+            try { f.userName = b.tip; } catch (e8) {}
+            if (b.caption) { try { f.buttonSetCaption(b.caption); } catch (e9) {} }
+            f.setAction("MouseUp", "if(typeof ARTool!=='undefined'){ARTool._bar('" + b.id + "',this);}");
+            x += b.w + 3;
+        }
+    }
+
+    function setBarStatus(doc, text) {
+        try {
+            var f = doc.getField(BAR + ".status");
+            if (f) { f.buttonSetCaption(text); }
+        } catch (e) {}
+    }
+
+    /**
+     * Start waiting for clicks.
+     *   opts.allPages : capture on every page (reference mode) instead of the current page
+     *   opts.bar      : show the options bar
+     *   opts.keep     : keep capturing after each click (reference mode)
+     */
+    function startCapture(doc, mode, data, tipKey, tipMsg, opts) {
+        opts = opts || {};
+        cancelCapture(doc);
+        var pages = [];
+        if (opts.allPages) {
+            for (var p = 0; p < doc.numPages; p++) { pages.push(p); }
+        } else {
+            pages.push(doc.pageNum);
+        }
+        for (var i = 0; i < pages.length; i++) {
+            addCaptureOnPage(doc, pages[i]);
+            if (opts.bar) { addBarOnPage(doc, pages[i]); }
+        }
+        capture = { doc: doc, page: doc.pageNum, mode: mode, data: data, keep: !!opts.keep, bar: !!opts.bar };
         if (tipKey) { tip(tipKey, tipMsg); }
     }
 
-    function onCapture(doc, page, mx, my) {
-        var c = capture;
-        capture = null;
-        // Remove the capture field after this click event has finished.
-        ART_timer = app.setTimeOut("ARTool._removeCapture()", 50);
-        ARTool._pendingRemoval = doc;
-        if (!c || c.doc !== doc) { return; }
-        if (typeof page !== "number") { page = c.page; }
+    function clickPoint(doc, page, mx, my) {
         var g = pageGeom(doc, page);
         var x = Number(mx);
         var y = Number(my);
         if (cfg.mouseYFromTop) { y = g.h - y; }
         x = Math.max(0, Math.min(g.w, x));
         y = Math.max(0, Math.min(g.h, y));
+        return [x, y];
+    }
+
+    function onCapture(doc, page, mx, my) {
+        var c = capture;
+        if (!c || c.doc !== doc) {
+            // Stray capture fields (e.g. Acrobat restarted mid-session): clean up.
+            removeCaptureFields(doc);
+            return;
+        }
+        var pt = clickPoint(doc, page, mx, my);
+        var x = pt[0];
+        var y = pt[1];
         var reg = loadReg(doc);
         sync(doc, reg);
-        if (c.mode === "tag") {
-            finishTag(doc, reg, c.data.label, c.data.side, page, tagRectAt(c.data.label, x, y));
-        } else if (c.mode === "tape") {
+        if (c.mode === "ref") {
+            refPlace(doc, reg, c.data, page, x, y);
+            saveReg(doc, reg);
+            return;
+        }
+        // One-shot captures: remove the fields once this click event is over.
+        capture = null;
+        ART_timer = app.setTimeOut("ARTool._removeCapture()", 50);
+        api._pendingRemoval = doc;
+        if (c.mode === "tape") {
             var s = tapeSize(c.data.text);
             addTape(doc, reg, page, [x, y - s[1], x + s[0], y], c.data.text);
         } else if (c.mode === "move") {
@@ -585,25 +689,258 @@ var ARTool = (function () {
                 var p = parseName(a.name);
                 var item = reg.items[a.name];
                 destroyArt(doc, reg, a);
-                var nr = tagRectAt(p.label, x, y);
                 if (page !== item.page) { item.linkRect = null; }
-                addTag(doc, reg, p.label, p.side, page, nr);
+                addTag(doc, reg, p.label, p.side, page, tagRectAt(p.label, x, y), item.style);
             }
         }
         saveReg(doc, reg);
     }
 
-    function finishTag(doc, reg, label, side, page, rect) {
-        addTag(doc, reg, label, side, page, rect);
+    // -----------------------------------------------------------------------
+    // Reference mode: click a figure, click its match, repeat. Numbers run
+    // on automatically (A-1, A-2, ...).
+    // -----------------------------------------------------------------------
+    var TAG_COLORS = {
+        Red: { text: ["RGB", 0.8, 0, 0], fill: ["RGB", 1, 1, 0.8] },
+        Blue: { text: ["RGB", 0, 0.25, 0.75], fill: ["RGB", 0.9, 0.95, 1] },
+        Green: { text: ["RGB", 0, 0.5, 0.15], fill: ["RGB", 0.9, 1, 0.9] },
+        Black: { text: ["RGB", 0, 0, 0], fill: ["RGB", 1, 1, 1] }
+    };
+    var TAG_SIZES = { Small: 6.5, Medium: 8, Large: 10 };
+
+    function getPrefs() {
+        return {
+            color: getGlobal("ART_tagColor", "Red"),
+            size: getGlobal("ART_tagSize", "Medium"),
+            showOptions: getGlobal("ART_showOptions", true) !== false
+        };
+    }
+
+    function currentStyle() {
+        var p = getPrefs();
+        return { color: TAG_COLORS[p.color] ? p.color : "Red", size: TAG_SIZES[p.size] ? p.size : "Medium" };
+    }
+
+    function labelInUse(doc, present, label) {
+        return !!(present[tagName(label, 1)] || present[tagName(label, 2)]);
+    }
+
+    /** Next unused label in the running sequence, e.g. A-7. */
+    function nextFreeLabel(reg, present) {
+        var n = reg.next || 1;
+        while (present[tagName(reg.prefix + n, 1)] || present[tagName(reg.prefix + n, 2)]) { n++; }
+        reg.next = n;
+        return reg.prefix + n;
+    }
+
+    function statusText(data) {
+        return data.side === 1 ? data.label + "  -  click the figure" : data.label + "  -  now click its match";
+    }
+
+    function refPlace(doc, reg, data, page, x, y) {
+        var label = data.label;
+        var side = data.side;
+        addTag(doc, reg, label, side, page, tagRectAt(label, x, y), currentStyle());
+        data.history.push(tagName(label, side));
         var m = label.match(/^(.*?)(\d+)$/);
         if (m && m[1] === reg.prefix && Number(m[2]) >= reg.next) { reg.next = Number(m[2]) + 1; }
         if (side === 1) {
             reg.pending = label;
-            saveReg(doc, reg);
-            tip("afterSide1", "Tag " + label + " placed (1 of 2).\n\nGo to the supporting page and click Place Tag again to place its match.");
+            data.side = 2;
         } else {
             reg.pending = null;
-            saveReg(doc, reg);
+            var present = sync(doc, reg);
+            data.label = nextFreeLabel(reg, present);
+            data.side = 1;
+        }
+        setBarStatus(doc, statusText(data));
+    }
+
+    function refUndo(doc) {
+        var c = capture;
+        if (!c || c.mode !== "ref" || !c.data.history.length) { return; }
+        var name = c.data.history.pop();
+        var reg = loadReg(doc);
+        var present = sync(doc, reg);
+        var p = parseName(name);
+        if (present[name]) { destroyArt(doc, reg, present[name]); }
+        delete reg.items[name];
+        c.data.label = p.label;
+        c.data.side = p.side;
+        reg.pending = p.side === 2 ? p.label : null;
+        var m = p.label.match(/^(.*?)(\d+)$/);
+        if (m && m[1] === reg.prefix) { reg.next = Number(m[2]); }
+        saveReg(doc, reg);
+        setBarStatus(doc, statusText(c.data));
+    }
+
+    /**
+     * The options panel. Returns the chosen settings, or null if cancelled.
+     * canChangeNext: false while the first half of a pair is waiting.
+     */
+    function optionsDialog(nextLabel, canChangeNext, starting) {
+        var prefs = getPrefs();
+        var colors = ["Red", "Blue", "Green", "Black"];
+        var sizes = ["Small", "Medium", "Large"];
+        var result = null;
+        function listFor(items, chosen) {
+            var o = {};
+            for (var i = 0; i < items.length; i++) { o[items[i]] = (items[i] === chosen) ? 1 : -1; }
+            return o;
+        }
+        function picked(list) {
+            for (var k in list) { if (list.hasOwnProperty(k) && list[k] > 0) { return k; } }
+            return null;
+        }
+        var dlg = {
+            initialize: function (d) {
+                d.load({
+                    next: nextLabel,
+                    colr: listFor(colors, prefs.color),
+                    size: listFor(sizes, prefs.size),
+                    show: prefs.showOptions
+                });
+                d.enable({ next: canChangeNext });
+            },
+            commit: function (d) {
+                var r = d.store();
+                result = {
+                    next: trim(r.next || ""),
+                    color: picked(r.colr) || prefs.color,
+                    size: picked(r.size) || prefs.size,
+                    showOptions: !!r.show
+                };
+            },
+            description: {
+                name: "Reference Tool",
+                elements: [
+                    {
+                        type: "view",
+                        align_children: "align_left",
+                        elements: [
+                            {
+                                type: "view",
+                                align_children: "align_row",
+                                elements: [
+                                    { type: "static_text", name: "Next reference:" },
+                                    { type: "edit_text", item_id: "next", width: 80 },
+                                    { type: "static_text", name: "Colour:" },
+                                    { type: "popup", item_id: "colr", width: 80 },
+                                    { type: "static_text", name: "Size:" },
+                                    { type: "popup", item_id: "size", width: 80 }
+                                ]
+                            },
+                            {
+                                type: "static_text",
+                                name: "Click a figure, then click its match (any page). Numbers continue automatically.",
+                                width: 470
+                            },
+                            { type: "check_box", item_id: "show", name: "Show these options each time I start" }
+                        ]
+                    },
+                    { type: "ok_cancel", ok_name: starting ? "Start" : "OK" }
+                ]
+            }
+        };
+        if (app.execDialog(dlg) !== "ok") { return null; }
+        return result;
+    }
+
+    function applyOptions(opts) {
+        setGlobal("ART_tagColor", opts.color);
+        setGlobal("ART_tagSize", opts.size);
+        setGlobal("ART_showOptions", opts.showOptions);
+    }
+
+    /** Validate a typed "next reference" and point the sequence at it. */
+    function setNextLabel(doc, reg, present, label) {
+        if (!label || label.indexOf(":") >= 0) {
+            app.alert("Please use a reference without colons, e.g. A-1.");
+            return false;
+        }
+        if (labelInUse(doc, present, label)) {
+            app.alert("Reference " + label + " is already used in this document. Pick another number.");
+            return false;
+        }
+        var m = label.match(/^(.*?)(\d+)$/);
+        if (m) { reg.prefix = m[1]; reg.next = Number(m[2]); }
+        return true;
+    }
+
+    function refIsActive() { return !!(capture && capture.mode === "ref"); }
+
+    function stopReferenceMode(doc) {
+        var c = capture;
+        cancelCapture(doc);
+        if (c && c.mode === "ref" && c.data.side === 2) {
+            app.alert({
+                cTitle: "Reference Tool",
+                nIcon: 3,
+                cMsg: c.data.label + " doesn't have its match yet. Next time you start the Reference tool it will pick up there."
+            });
+        }
+    }
+
+    function placeTag(doc) {
+        // The same button starts and stops reference mode.
+        if (capture) {
+            if (capture.mode === "ref") { stopReferenceMode(doc); } else { cancelCapture(doc); }
+            return;
+        }
+        removeCaptureFields(doc);
+        var reg = loadReg(doc);
+        var present = sync(doc, reg);
+        var data = { label: null, side: 1, history: [] };
+        if (reg.pending) {
+            data.label = reg.pending;
+            data.side = 2;
+        } else {
+            data.label = nextFreeLabel(reg, present);
+        }
+
+        if (getPrefs().showOptions) {
+            while (true) {
+                var o = optionsDialog(data.label, data.side === 1, true);
+                if (!o) { return; }
+                applyOptions(o);
+                if (data.side === 1 && o.next !== data.label) {
+                    if (!setNextLabel(doc, reg, present, o.next)) { continue; }
+                    data.label = o.next;
+                }
+                break;
+            }
+        }
+        saveReg(doc, reg);
+        startCapture(doc, "ref", data, "refmode",
+            "Reference mode is on.\n\n" +
+            "Click a figure to place " + data.label + ", then click its match on any page. " +
+            "The next number follows automatically.\n\n" +
+            "Use the bar at the top of the page to Undo, change Options, or finish (Done). " +
+            "Clicking the Reference button again also finishes.",
+            { allPages: true, bar: true, keep: true });
+        setBarStatus(doc, statusText(data));
+    }
+
+    function barClick(id, doc) {
+        var c = capture;
+        if (!c || c.mode !== "ref" || c.doc !== doc) { removeCaptureFields(doc); return; }
+        if (id === "done") { stopReferenceMode(doc); return; }
+        if (id === "undo") { refUndo(doc); return; }
+        if (id === "opts" || id === "status") {
+            var reg = loadReg(doc);
+            var present = sync(doc, reg);
+            while (true) {
+                var o = optionsDialog(c.data.label, c.data.side === 1, false);
+                if (!o) { return; }
+                applyOptions(o);
+                if (c.data.side === 1 && o.next !== c.data.label) {
+                    if (!setNextLabel(doc, reg, present, o.next)) { continue; }
+                    c.data.label = o.next;
+                    saveReg(doc, reg);
+                }
+                break;
+            }
+            setBarStatus(doc, statusText(c.data));
         }
     }
 
@@ -617,67 +954,6 @@ var ARTool = (function () {
     // -----------------------------------------------------------------------
     // Commands
     // -----------------------------------------------------------------------
-    function placeTag(doc) {
-        if (capture) { cancelCapture(doc); return; }
-        var reg = loadReg(doc);
-        var present = sync(doc, reg);
-        var label = null;
-        var side = 1;
-
-        if (reg.pending) {
-            var ans = app.alert({
-                cTitle: "Place Tag",
-                nIcon: 2,
-                nType: 3,
-                cMsg: "Tag " + reg.pending + " is waiting for its match.\n\n" +
-                    "Yes: place the matching " + reg.pending + " now\n" +
-                    "No: leave it unmatched and start a new tag\n" +
-                    "Cancel: do nothing"
-            });
-            if (ans === 4) { label = reg.pending; side = 2; }
-            else if (ans === 3) { reg.pending = null; }
-            else { return; }
-        }
-
-        if (!label) {
-            var dflt = reg.prefix + reg.next;
-            var r = app.response({
-                cQuestion: "Label for this reference tag:",
-                cTitle: "Place Tag",
-                cDefault: dflt
-            });
-            if (r === null || r === undefined) { return; }
-            r = trim(r);
-            if (!r || r.indexOf(":") >= 0) { app.alert("Please use a label without colons, e.g. " + dflt + "."); return; }
-            if (present[tagName(r, 1)] || present[tagName(r, 2)]) {
-                app.alert("Tag " + r + " is already in use. Choose another label, or use Move Tag / Delete Tag.");
-                return;
-            }
-            var m = r.match(/^(.*?)(\d+)$/);
-            if (m && m[1] !== reg.prefix) { reg.prefix = m[1]; reg.next = Number(m[2]); }
-            label = r;
-            side = 1;
-        }
-
-        // Shortcut: if one ordinary comment (e.g. a rectangle drawn around
-        // the number) is selected, put the tag just to its right.
-        var marker = selectedMarker(doc);
-        if (marker) {
-            var mr = marker.rect;
-            var s = tagSize(label);
-            var cx = mr[2] + s[0] / 2 + 2;
-            var cy = (mr[1] + mr[3]) / 2;
-            finishTag(doc, reg, label, side, marker.page, tagRectAt(label, cx, cy));
-            return;
-        }
-
-        saveReg(doc, reg);
-        startCapture(doc, "tag", { label: label, side: side }, "capture",
-            "Click on the page where tag " + label + " should go.\n\n" +
-            "(A blue dashed frame shows the page is waiting for your click. " +
-            "Click Place Tag again to cancel.)");
-    }
-
     function tapeDialog(prefill) {
         var result = null;
         var dlg = {
@@ -1118,12 +1394,13 @@ var ARTool = (function () {
             nIcon: 3,
             cMsg: "Workpaper Reference Tool " + VERSION + "\n" + RELEASES_URL + "\n\n" +
                 "Find these commands under Menu > Reference Tool (new Acrobat) or Edit > Reference Tool (classic).\n\n" +
-                "Place Tag: click Place Tag, click the figure; go to the support, click Place Tag, click the matching figure.\n" +
+                "Reference Tool: click it, then click a figure and click its match (any page). Numbers run on automatically; " +
+                "use the bar at the top of the page to Undo, change Options or finish (Done).\n" +
                 "Calc Tape: enter the calculation, then click where the tape goes.\n" +
                 "Tag Check: list all tags and flag unmatched or broken ones.\n" +
                 "Replace Page: swap in a new version of a page and keep its tags.\n" +
                 "Repair Tags: restore tags or tapes lost outside the tool.\n\n" +
-                "Tip: draw a rectangle comment around a figure and keep it selected before clicking Place Tag to put the tag right beside it."
+                "Toolbar: add the buttons via the toolbar's Customize option (look under Add-on tools / Custom tools)."
         });
     }
 
@@ -1154,8 +1431,142 @@ var ARTool = (function () {
         app.alert("Reference Tool error in " + id + ":\n\n" + e + (e && e.lineNumber ? " (line " + e.lineNumber + ")" : ""));
     }
 
+    // -----------------------------------------------------------------------
+    // Toolbar icons (20 x 20). Letters are colours; "." is transparent.
+    // -----------------------------------------------------------------------
+    var ICON_COLORS = { r: "FFC62828", b: "FF1F4E9A", k: "FF333333", g: "FF2E7D32", y: "FFFFF59D", w: "FFFFFFFF" };
+    var ICONS = {
+        placeTag: [
+            "....................",
+            "....................",
+            "rrrrrrrr............",
+            "ryyyyyyr............",
+            "ryrrryyr............",
+            "ryryryyr............",
+            "ryrrryyr............",
+            "ryryryyr...bb.......",
+            "ryryryyr..b..b......",
+            "rrrrrrrrbb....b.....",
+            ".........b.....b....",
+            "..........b.....bbbb",
+            "...........b....b..b",
+            "............b..b...b",
+            "............rrrrrrrr",
+            "............ryyyyyyr",
+            "............ryrrryyr",
+            "............ryryryyr",
+            "............ryrrryyr",
+            "............rrrrrrrr"
+        ],
+        calcTape: [
+            "...kkkkkkkkkkkk.....",
+            "...kwwwwwwwwwwk.....",
+            "...kwbbbbbbbbwk.....",
+            "...kwbbbbbbbbwk.....",
+            "...kwwwwwwwwwwk.....",
+            "...kwkkwkkwkkwk.....",
+            "...kwkkwkkwkkwk.....",
+            "...kwwwwwwwwwwk.....",
+            "...kwkkwkkwkkwk.....",
+            "...kwkkwkkwkkwk.....",
+            "...kwwwwwwwwwwk.....",
+            "...kwkkwkkwrrwk.....",
+            "...kwkkwkkwrrwk.....",
+            "...kwwwwwwwwwwk.....",
+            "...kkkkkkkkkkkk.....",
+            ".....wwwwwwwwww.....",
+            ".....wkkkkkkkkw.....",
+            ".....wwwwwwwwww.....",
+            ".....wkkkkkkw.......",
+            ".....wwwwwwww......."
+        ],
+        tagCheck: [
+            "....................",
+            "..kkkkkkkkkkkk......",
+            "..kwwwwwwwwwwk......",
+            "..kwrrrwwwwwwk......",
+            "..kwwwwwwwwwwk......",
+            "..kwrrrwkkkkwk......",
+            "..kwwwwwwwwwwk......",
+            "..kwrrrwkkkkwk......",
+            "..kwwwwwwwwwwk......",
+            "..kwrrrwkkkwwk.....g",
+            "..kwwwwwwwwwwk....gg",
+            "..kwrrrwkkkk.....gg.",
+            "..kwwwwwwwww....gg..",
+            "..kwrrrwkk.g...gg...",
+            "..kwwwwwww.gg.gg....",
+            "..kkkkkkkk..ggg.....",
+            ".............g......",
+            "....................",
+            "....................",
+            "...................."
+        ],
+        replacePage: [
+            "kkkkkkkkk...........",
+            "kwwwwwwwk...........",
+            "kwkkkkkwk...........",
+            "kwwwwwwwk...........",
+            "kwkkkkkwk...b.......",
+            "kwwwwwwwk...bb......",
+            "kwkkkkkwkbbbbbb.....",
+            "kwwwwwwwk...bb......",
+            "kkkkkkkkk...b.......",
+            "...........bbbbbbbbb",
+            "...........bwwwwwwwb",
+            "...........bwrrwwwwb",
+            "...........bwwwwwwwb",
+            "...........bwbbbbbwb",
+            "...........bwwwwwwwb",
+            "...........bwbbbbbwb",
+            "...........bwwwwwwwb",
+            "...........bwbbbwwwb",
+            "...........bwwwwwwwb",
+            "...........bbbbbbbbb"
+        ],
+        repairTags: [
+            "....................",
+            ".......bbbbbb.......",
+            ".....bb......bb.....",
+            "....b..........b....",
+            "...b............b...",
+            "..b..............b..",
+            "..b...rrrrrrr....bbb",
+            ".b....ryyyyyr.....b.",
+            ".b....ryrrryr.......",
+            ".b....ryrryyr.......",
+            ".b....ryrrryr.....b.",
+            ".b....ryyyyyr.....b.",
+            "bbb...rrrrrrr....b..",
+            ".b...............b..",
+            "..................b.",
+            "...b.............b..",
+            "....b..........b....",
+            ".....bb......bb.....",
+            ".......bbbbbb.......",
+            "...................."
+        ]
+    };
+
+    /** Build the icon object Acrobat's addToolButton expects. */
+    function makeIcon(rows) {
+        var hex = "";
+        for (var y = 0; y < rows.length; y++) {
+            for (var x = 0; x < 20; x++) {
+                var ch = rows[y].charAt(x);
+                hex += ICON_COLORS[ch] || "00000000";
+            }
+        }
+        return {
+            count: 0,
+            width: 20,
+            height: 20,
+            read: function (nBytes) { return hex.slice(this.count, this.count += 2 * nBytes); }
+        };
+    }
+
     var COMMANDS = [
-        { id: "placeTag", label: "Place Tag", tip: "Place a reference tag (statement, then support)", toolbar: true },
+        { id: "placeTag", label: "Reference Tool", short: "Reference", tip: "Reference tool: click a figure, then its match. Click again to finish.", toolbar: true },
         { id: "calcTape", label: "Calc Tape", tip: "Calculator that leaves a tape on the page", toolbar: true },
         { id: "tagCheck", label: "Tag Check", tip: "List all tags and flag unmatched or broken ones", toolbar: true },
         { id: "replacePage", label: "Replace Page (Keep Tags)", tip: "Replace this page and keep its tags and tapes", toolbar: true },
@@ -1186,6 +1597,10 @@ var ARTool = (function () {
                 showError(id, e);
             }
         },
+        isActive: function () { return refIsActive(); },
+        _bar: function (id, doc) {
+            try { barClick(id, doc); } catch (e) { showError("reference bar", e); }
+        },
         _onCapture: function (doc, page, x, y) {
             try { onCapture(doc, page, x, y); } catch (e) { showError("placing", e); }
         },
@@ -1213,7 +1628,9 @@ var ARTool = (function () {
             linkScript: linkScript,
             toRotatedRect: toRotatedRect,
             buildReport: buildReport,
-            getCapture: function () { return capture; }
+            getCapture: function () { return capture; },
+            makeIcon: makeIcon,
+            icons: ICONS
         },
         installUI: function () {
             var i;
@@ -1235,15 +1652,21 @@ var ARTool = (function () {
                     app.addMenuItem({ cName: "ARTMenu_" + c.id, cUser: c.label, cParent: "ARTMenu", cExec: exec });
                 } catch (e2) {}
                 if (c.toolbar) {
+                    var btn = {
+                        cName: "ARTBtn_" + c.id,
+                        cLabel: c.short || c.label.replace(" (Keep Tags)", ""),
+                        cExec: exec,
+                        cTooltext: c.tip,
+                        cEnable: "event.rc = (event.target != null);"
+                    };
+                    if (c.id === "placeTag") { btn.cMarked = "event.rc = ARTool.isActive();"; }
+                    if (ICONS[c.id]) { btn.oIcon = makeIcon(ICONS[c.id]); }
                     try {
-                        app.addToolButton({
-                            cName: "ARTBtn_" + c.id,
-                            cLabel: c.label.replace(" (Keep Tags)", ""),
-                            cExec: exec,
-                            cTooltext: c.tip,
-                            cEnable: "event.rc = (event.target != null);"
-                        });
-                    } catch (e3) {}
+                        app.addToolButton(btn);
+                    } catch (e3) {
+                        // Older Acrobat may reject an icon; try without.
+                        try { delete btn.oIcon; app.addToolButton(btn); } catch (e4) {}
+                    }
                 }
             }
         }

@@ -4,7 +4,7 @@ An Acrobat add-on for preparing accounting work papers.
 
 | Feature | What it does |
 |---|---|
-| **Place Tag** | Puts a matching pair of reference tags (e.g. `A-1`) on a figure in the financial statements and on the same figure in the support. Clicking either tag jumps to the other. |
+| **Reference** | Click a figure in the financial statements, then its match in the support. Numbers run on automatically (A-1, A-2, …), and clicking either tag jumps to the other. |
 | **Calc Tape** | A calculator that leaves its tape on the page as a comment, so the reviewer can see how a figure was worked out. |
 | **Tag Check** | Lists every tag with its page numbers and flags tags that are unmatched or broken. |
 | **Replace Page (Keep Tags)** | Swaps a page for a new version (for example a reissued bank statement) and puts back the tags and tapes that were on it. |
@@ -36,10 +36,10 @@ The Windows installer:
 - installs an updater and an uninstaller,
 - adds **Start menu → Reference Tool** shortcuts.
 
-**Where the toolbar buttons appear** (Place Tag, Calc Tape, Tag Check, Replace Page, Repair Tags) depends on the Acrobat version:
+**Adding the buttons to your toolbar** (Reference, Calc Tape, Tag Check, Replace Page, Repair Tags):
 
+- New interface: click the **⋯** at the bottom of the left-hand quick-tools bar, choose **Customize toolbar**, and add them from the add-on/custom tools section.
 - Classic interface: *View → Tools → Add-on Tools*.
-- New interface: *All tools*.
 - If you can't find them, *Menu → Reference Tool* always has every command.
 
 If the menu doesn't show up, go to *Preferences → JavaScript* and tick *Enable Acrobat JavaScript*.
@@ -91,18 +91,24 @@ Everyone's updater picks up the new release from there. To build the files local
 3. **Reference.** In the combined PDF, tag each figure on the statements to its support.
 4. **Before review:** run **Tag Check** and fix anything it flags.
 
-### Place Tag
+### Reference (placing tags)
 
-1. Go to the page with the figure (for example Cash on the balance sheet) and click **Place Tag**.
-2. Accept the suggested label (`A-1`, `A-2`, …) or type your own, such as `B-3` or `Cash-1`. A blue dashed frame shows the page is waiting for a click.
-3. Click the figure. Side 1 of the tag is placed.
-4. Go to the supporting page and click **Place Tag** again. Answer **Yes** to place the match, then click the matching figure.
+1. Click **Reference** on the toolbar, or go to **Menu → Reference Tool → Reference Tool**.
+2. The options panel opens. Check the next reference (e.g. `A-1`) and pick a colour and size, then click **Start**.
+3. Click the figure on the financial statements, then click the matching figure in the support, on any page.
+4. Keep going: the next click places `A-2`, then its match, and so on. You don't type numbers.
+5. When you're finished, click **Done** on the bar at the top of the page, or click **Reference** again.
 
-Click **Place Tag** again at any time to cancel click mode.
+While reference mode is on, a small bar sits at the top of every page:
 
-To jump between the two sides, click a tag with the normal Hand/Select tool.
+- **Status:** shows what your next click places, e.g. `A-3 - now click its match`.
+- **Undo:** removes the last tag you placed.
+- **Options:** change the next number, colour or size.
+- **Done:** finishes reference mode.
 
-**Tip:** If you draw a rectangle comment around a figure and keep it selected before clicking Place Tag, the tag goes right next to the rectangle and you skip the click step. The rectangle stays on the page as a highlight.
+The bar doesn't print and goes away when you finish.
+
+To jump between the two sides of a reference, click either tag with the normal Hand/Select tool.
 
 ### Calc Tape
 
@@ -209,7 +215,7 @@ The mock can't show how Acrobat itself behaves, so a manual check in Acrobat Pro
 **Manual test checklist (first run in Acrobat)**
 
 - [ ] The *Menu → Reference Tool* menu and the toolbar buttons appear.
-- [ ] Place Tag: the tag lands where you click.
+- [x] Reference: the tag lands where you click (verified in Acrobat 26.x), and clicking a tag jumps to its match.
   - If the height is off, set `mouseYFromTop: true`.
 - [ ] Clicking a tag jumps to its match, and back again.
 - [ ] Calc Tape: the tape's columns line up in a monospaced font.
