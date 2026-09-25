@@ -16,7 +16,7 @@ const assert = require("assert");
 function makeEnvWith(menuParents) { return makeEnv(menuParents); }
 let docCount = 0;
 function makeEnv(menuParents) {
-  const env = { menuParents: menuParents || null, httpRequests: [], launched: [], alerts: [], alertAnswers: [], responses: [], dialogs: [], dialogResults: [], timers: [], intervals: [], widgetUpdates: 0 };
+  const env = { dialogScripts: [], menuParents: menuParents || null, httpRequests: [], launched: [], alerts: [], alertAnswers: [], responses: [], dialogs: [], dialogResults: [], timers: [], intervals: [], widgetUpdates: 0 };
 
   class Annot {
     constructor(doc, props) { this._doc = doc; Object.assign(this, props); if (!this.name) this.name = "auto" + Math.random(); this.rect = props.rect.slice(); }
@@ -134,7 +134,6 @@ function makeEnv(menuParents) {
       new (vm.runInContext("Function", ctx))("event", script).call(this, { target: f });
       runTimers();
     }
-    calc(id) { const f = this._fields["ART_CALC." + id]; return f ? (f.type === "button" ? f.caption : f.value) : null; }
   }
 
   let ctx;
@@ -148,6 +147,7 @@ function makeEnv(menuParents) {
     response() { return env.responses.shift(); },
     execDialog(d) {
       env.dialogs.push(d);
+      if (env.dialogScripts.length) return runDialogScript(d, env.dialogScripts.shift());
       const loaded = {};
       let res = env.dialogResults.shift();
       if (res === undefined) res = {}; // accept the dialog as shown
@@ -171,6 +171,23 @@ function makeEnv(menuParents) {
     },
     addMenuItem(o) { (env.menuItems = env.menuItems || []).push(o.cUser); }, addToolButton(o) { (env.buttons = env.buttons || []).push(o.cLabel); (env.buttonObjs = env.buttonObjs || []).push(o); }
   };
+  // A scripted user in a dialog: type into boxes, press Enter, click buttons, OK or Cancel.
+  function runDialogScript(d, script) {
+    const fields = {};
+    const h = { load(o) { Object.assign(fields, o); }, store() { return Object.assign({}, fields); }, enable() {}, focus(id) { h.focused = id; } };
+    if (d.initialize) d.initialize(h);
+    const ui = {
+      d, h, fields,
+      get(id) { return fields[id]; },
+      type(id, v) { fields[id] = v; },                  // replace a box's text
+      leave(id) { if (d[id]) d[id](h); },                // click out of a box after changing it
+      enter(text) { if (text !== undefined) fields.entr = text; return d.validate(h) === false ? null : "ok"; },
+      click(id) { d[id](h); },
+      ok() { if (d.validate && d.validate(h) === false) return null; if (d.commit) d.commit(h); return "ok"; }
+    };
+    const r = script(ui);
+    return r || "cancel";
+  }
   function runTimers() { while (env.timers.length) vm.runInContext(env.timers.shift(), ctx); }
   function runIntervals(ticks) { for (let i = 0; i < (ticks || 1); i++) env.intervals.slice().forEach(t => vm.runInContext(t.expr, ctx)); }
 
@@ -212,14 +229,17 @@ function refPairs(env, doc, clicks, opts) {
 }
 // Make a tape with the calculator: type the lines, Place on page, click the page.
 function makeTape(env, doc, t, x, y) {
-  env.ART.run("calcTape", doc); env.runTimers();
-  if (t.titl) { doc.type("ART_CALC.titl", t.titl); doc.commit("ART_CALC.titl", 1); }
-  if (t.init !== undefined) { doc._fields["ART_CALC.init"].value = ""; doc.type("ART_CALC.init", t.init); doc.commit("ART_CALC.init", 1); }
-  for (const line of String(t.ents).split("\n")) { doc.type("ART_CALC.entr", line); doc.commit("ART_CALC.entr", 2); }
-  doc.press("ART_CALC.place");
+  env.dialogScripts.push(ui => {
+    if (t.titl) { ui.type("titl", t.titl); ui.leave("titl"); }
+    if (t.init !== undefined) { ui.type("init", t.init); ui.leave("init"); }
+    for (const line of String(t.ents).split("\n")) ui.enter(line);
+    return ui.ok();
+  });
+  env.ART.run("calcTape", doc);
   doc.click(x, y);
   return doc._annots.filter(a => a.name.startsWith("ART:P:")).pop();
 }
+const okName = ui => ui.d.description.elements[ui.d.description.elements.length - 1].ok_name;
 const tapeBtn = (doc, tape) => doc._fields["ART_TBTN." + tape.name.slice(6)];
 const doubleClick = (doc, tape, x, y) => { const n = "ART_TBTN." + tape.name.slice(6); doc.press(n, x, y); doc.press(n, x, y); };
 const followLink = (env, doc, link) => { new (vm.runInContext("Function", env.ctx))(link.action).call(doc); return doc.pageNum; };
@@ -509,75 +529,89 @@ test("calculator keys: + - act on the number typed, * / on the next number", () 
   eq(k("800 2023", "/"), null);
 });
 
-test("Calc Tape opens a calculator on the page, not a pop-up window", () => {
-  const env = makeEnv(); const doc = new env.Doc(3); doc.pageNum = 1;
-  env.ART.run("calcTape", doc); env.runTimers();
-  assert.strictEqual(env.dialogs.length, 0, "no dialog");
-  const f = doc._fields["ART_CALC.entr"];
-  assert.ok(f && f.page === 1, "on the page being viewed");
-  assert.ok(f.box === undefined && f.rect[1] > 700 && f.rect[2] > 500, "top-right of the page: " + f.rect);
-  assert.strictEqual(env.focused, "ART_CALC.entr", "cursor in the Amount box");
-  assert.ok(Object.values(doc._fields).every(x => x.display === 3), "doesn't print");
-  assert.strictEqual(doc.calc("place"), "Place on page");
-  assert.ok(/type an amount/i.test(doc.calc("info")));
+test("Calc Tape opens a pop-up window with the cursor in the Amount box", () => {
+  const env = makeEnv(); const doc = new env.Doc(2);
+  let seen;
+  env.dialogScripts.push(ui => { seen = { focused: ui.h.focused, ok: okName(ui), stat: ui.get("stat") }; return "cancel"; });
+  env.ART.run("calcTape", doc);
+  assert.strictEqual(env.dialogs.length, 1);
+  assert.strictEqual(seen.focused, "entr");
+  assert.strictEqual(seen.ok, "Place on page");
+  assert.ok(/Enter/.test(seen.stat), seen.stat);
+  assert.strictEqual(doc.fieldNames().length, 0, "nothing added to the page");
 });
 
-test("calculator: + - * / work the moment they're pressed", () => {
+test("calculator: + - * / are read when you press Enter, several at a time if you like", () => {
   const env = makeEnv(); const doc = new env.Doc(1);
-  env.ART.run("calcTape", doc); env.runTimers();
-  const E = "ART_CALC.entr";
-  doc.type(E, "12,400+");
-  assert.strictEqual(doc.calc("entr"), "", "box cleared for the next number");
-  assert.strictEqual(doc.calc("totl"), "12,400.00", "total updates straight away");
-  doc.type(E, "800-");
-  assert.strictEqual(doc.calc("totl"), "11,600.00");
-  doc.type(E, "250*");
-  assert.strictEqual(doc.calc("entr"), "250 x ", "waits for the next number");
-  assert.ok(/250 x/.test(doc.calc("info")) && /next number/.test(doc.calc("info")), doc.calc("info"));
-  assert.strictEqual(doc.calc("totl"), "11,600.00", "nothing added yet");
-  doc.type(E, "12+");
-  assert.strictEqual(doc.calc("totl"), "14,600.00", "250 x 12 = 3,000 added");
-  doc.type(E, "*1.1");
-  assert.strictEqual(doc.calc("entr"), "*1.1", "* on an empty box multiplies the total by the next number");
-  doc.commit(E, 2);                                   // Enter
-  assert.strictEqual(doc.calc("totl"), "16,060.00");
-  assert.strictEqual(doc.calc("entr"), "");
-  assert.strictEqual(env.focused, E, "cursor back in the Amount box after Enter");
-  doc.type(E, "800 O/S cheque");                     // the / is part of the description
-  assert.strictEqual(doc.calc("entr"), "800 O/S cheque");
-  doc.commit(E, 2);
-  assert.strictEqual(doc.calc("totl"), "16,860.00");
-  doc.type(E, "/2+");
-  assert.strictEqual(doc.calc("totl"), "8,430.00");
-  doc.type(E, "-100+");
-  assert.strictEqual(doc.calc("totl"), "8,330.00", "negative typed with a minus sign");
-  assert.strictEqual(doc.calc("ents"), "12,400\n-800\n250 x 12\n*1.1\n800 O/S cheque\n/ 2\n-100");
-  assert.ok(/3,000\.00  \+  250 x 12/.test(doc.calc("prev")), doc.calc("prev"));
-  assert.ok(/8,330\.00  T  Total/.test(doc.calc("prev")));
+  const seen = [];
+  const snap = ui => seen.push({ totl: ui.get("totl"), entr: ui.get("entr"), stat: ui.get("stat"), ents: ui.get("ents"), prev: ui.get("prev") });
+  env.dialogScripts.push(ui => {
+    ui.enter("12,400+"); snap(ui);          // 0
+    ui.enter("800-"); snap(ui);             // 1
+    ui.enter("250*"); snap(ui);             // 2: waits for the next number
+    ui.enter("250 x 12"); snap(ui);         // 3
+    ui.enter("*1.1"); snap(ui);             // 4: multiplies the total
+    ui.enter("800 O/S cheque"); snap(ui);   // 5: the / is part of the description
+    ui.enter("/2+-100+"); snap(ui);         // 6: two at once
+    ui.enter("100+200-50"); snap(ui);       // 7: Enter adds the last one
+    return "cancel";
+  });
+  env.ART.run("calcTape", doc);
+  assert.deepStrictEqual([seen[0].totl, seen[0].entr], ["12,400.00", ""]);
+  assert.strictEqual(seen[1].totl, "11,600.00");
+  assert.deepStrictEqual([seen[2].totl, seen[2].entr], ["11,600.00", "250 x "]);
+  assert.ok(/250 x .*next number/.test(seen[2].stat), seen[2].stat);
+  assert.strictEqual(seen[3].totl, "14,600.00", "250 x 12 = 3,000 added");
+  assert.strictEqual(seen[4].totl, "16,060.00");
+  assert.strictEqual(seen[5].totl, "16,860.00");
+  assert.strictEqual(seen[6].totl, "8,330.00");
+  assert.strictEqual(seen[7].totl, "8,280.00");
+  assert.strictEqual(seen[7].ents, "12,400\n-800\n250 x 12\n*1.1\n800 O/S cheque\n/ 2\n-100\n100\n-200\n50");
+  assert.ok(/3,000\.00  \+  250 x 12/.test(seen[7].prev), seen[7].prev);
+  assert.ok(/8,280\.00  T  Total/.test(seen[7].prev));
+  assert.ok(seen.every(x => x.entr === "" || x.entr === "250 x "), "box cleared after each Enter");
 });
 
-test("calculator: a line it can't read stays in the box with an explanation", () => {
+test("calculator: what it can't read stays in the Amount box with an explanation", () => {
   const env = makeEnv(); const doc = new env.Doc(1);
-  env.ART.run("calcTape", doc); env.runTimers();
-  const E = "ART_CALC.entr";
-  doc.type(E, "*5"); doc.commit(E, 2);
-  assert.ok(/Start with an amount/.test(doc.calc("info")), doc.calc("info"));
-  doc._fields[E].value = "";
-  doc.type(E, "hello"); doc.commit(E, 2);
-  assert.ok(/Can't read "hello"/.test(doc.calc("info")), doc.calc("info"));
-  assert.strictEqual(doc.calc("entr"), "hello", "left in the box to fix");
-  assert.strictEqual(doc.calc("ents"), "", "not added");
-  doc._fields[E].value = "";
-  doc.type(E, "5+"); doc.type(E, "250 x"); doc.commit(E, 2);
-  assert.ok(/number after x/.test(doc.calc("info")), doc.calc("info"));
-  assert.strictEqual(doc.calc("totl"), "5.00");
+  const seen = [];
+  const snap = ui => seen.push({ totl: ui.get("totl"), entr: ui.get("entr"), stat: ui.get("stat"), ents: ui.get("ents") });
+  env.dialogScripts.push(ui => {
+    ui.enter("*5"); snap(ui);
+    ui.enter("hello"); snap(ui);
+    ui.enter("5+250 x"); snap(ui);
+    ui.enter("100+abc+7"); snap(ui);
+    return "cancel";
+  });
+  env.ART.run("calcTape", doc);
+  assert.ok(/Start with an amount/.test(seen[0].stat), seen[0].stat);
+  assert.strictEqual(seen[0].entr, "*5");
+  assert.ok(/Can't read "hello"/.test(seen[1].stat), seen[1].stat);
+  assert.deepStrictEqual([seen[1].entr, seen[1].ents], ["hello", ""]);
+  assert.deepStrictEqual([seen[2].totl, seen[2].entr], ["5.00", "250 x "]);
+  assert.ok(/next number/.test(seen[2].stat));
+  assert.deepStrictEqual([seen[3].totl, seen[3].entr], ["105.00", "abc+7"], "the good part is added, the rest left to fix");
 });
 
-test("calculator: Place on page, then click - the tape keeps its lines for editing later", () => {
+test("calculator: Enter on an empty Amount box places the tape; a number left in the box is added first", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  let stayed;
+  env.dialogScripts.push(ui => {
+    ui.enter("5+6");
+    ui.type("entr", "7");
+    stayed = ui.ok();                       // Place with 7 still in the box: added, window stays open
+    return ui.enter("") && ui.ok();         // Enter on the empty box: done
+  });
+  env.ART.run("calcTape", doc);
+  assert.strictEqual(stayed, null);
+  doc.click(10, 500);
+  assert.ok(/18\.00  T/.test(doc._annots[0].contents), doc._annots[0].contents);
+});
+
+test("calculator: Place on page, then click - the tape keeps its lines for changing later", () => {
   const env = makeEnv(); const doc = new env.Doc(3); doc.pageNum = 1;
   const tape = makeTape(env, doc, { titl: "AR rollforward", ents: "1000\n+250\n-100", init: "GR" }, 50, 700);
   assert.ok(tape, "tape exists");
-  assert.strictEqual(Object.keys(doc._fields).filter(n => /^ART_CALC/.test(n)).length, 0, "calculator gone");
   assert.strictEqual(tape.page, 1);
   assert.strictEqual(tape.textFont, "Courier");
   assert.ok(/^TAPE: AR rollforward/.test(tape.contents));
@@ -595,67 +629,49 @@ test("calculator: Place on page, then click - the tape keeps its lines for editi
   assert.ok(r[1] <= t[3] - 5 - 8 * 1.2 + 0.01, "title line left clear to drag by");
 });
 
-test("calculator: a number left in the Amount box is added when you click Place", () => {
+test("calculator: Undo line, and editing the lines directly", () => {
   const env = makeEnv(); const doc = new env.Doc(1);
-  env.ART.run("calcTape", doc); env.runTimers();
-  doc.type("ART_CALC.entr", "5+"); doc.type("ART_CALC.entr", "7");
-  doc.commit("ART_CALC.entr", 1);                     // clicking Place leaves the box first
-  doc.press("ART_CALC.place"); doc.click(10, 500);
-  assert.ok(/12\.00  T/.test(doc._annots[0].contents), doc._annots[0].contents);
-});
-
-test("calculator: Undo line, typing the lines directly, and Cancel", () => {
-  const env = makeEnv(); const doc = new env.Doc(1);
-  env.ART.run("calcTape", doc); env.runTimers();
-  doc.type("ART_CALC.entr", "5+6+");
-  doc.press("ART_CALC.undo");
-  assert.strictEqual(doc.calc("totl"), "5.00");
-  assert.strictEqual(doc.calc("ents"), "5");
-  doc.type("ART_CALC.ents", "\n20 fees"); doc.commit("ART_CALC.ents", 1);
-  assert.strictEqual(doc.calc("totl"), "25.00", "edited lines count when you leave the box");
-  doc.press("ART_CALC.place");
-  assert.ok(doc.getField("ART_CAP.p0"), "waiting for the click");
-  env.ART.run("calcTape", doc); env.runTimers();       // start again, then cancel
-  doc.type("ART_CALC.entr", "9+");
-  doc.press("ART_CALC.cancel");
+  const seen = [];
+  env.dialogScripts.push(ui => {
+    ui.enter("5+6+");
+    ui.click("undo"); seen.push([ui.get("totl"), ui.get("ents"), ui.h.focused]);
+    ui.type("ents", "5\n20 fees"); ui.leave("ents"); seen.push([ui.get("totl")]);
+    return "cancel";
+  });
+  env.ART.run("calcTape", doc);
+  assert.deepStrictEqual(seen[0], ["5.00", "5", "entr"]);
+  assert.deepStrictEqual(seen[1], ["25.00"], "edited lines count when you leave the box");
+  assert.strictEqual(doc._annots.length, 0, "Cancel: nothing placed");
   assert.strictEqual(doc.fieldNames().length, 0);
-  assert.strictEqual(doc._annots.length, 0);
 });
 
-test("calculator follows the page you're viewing and can move to another corner", () => {
-  const env = makeEnv(); const doc = new env.Doc(6);
-  env.ART.run("calcTape", doc); env.runTimers();
-  doc.type("ART_CALC.titl", "Bank"); doc.type("ART_CALC.entr", "100+25");
-  doc.goTo(4);
-  const f = doc._fields["ART_CALC.entr"];
-  assert.strictEqual(f.page, 4, "moved to page 5");
-  assert.strictEqual(doc.calc("entr"), "25", "half-typed amount kept");
-  assert.strictEqual(doc.calc("titl"), "Bank");
-  assert.strictEqual(doc.calc("totl"), "100.00");
-  const x1 = f.rect[0], y1 = f.rect[1];
-  doc.press("ART_CALC.move");
-  const g = doc._fields["ART_CALC.entr"];
-  assert.ok(g.rect[1] < y1 - 300 && Math.abs(g.rect[0] - x1) < 1, "moved to the bottom-right corner");
-  doc.type("ART_CALC.entr", "+");
-  doc.press("ART_CALC.place"); doc.click(20, 300);
-  assert.strictEqual(doc._annots[0].page, 4);
-  assert.ok(/125\.00  T/.test(doc._annots[0].contents));
+test("calculator: lines it can't read are caught at Place, and the window reopens", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  let reopened;
+  env.dialogScripts.push(ui => { ui.type("ents", "abc"); return ui.ok(); });
+  env.dialogScripts.push(ui => { reopened = ui.get("ents"); ui.type("ents", "5\n5"); return ui.ok(); });
+  env.ART.run("calcTape", doc);
+  assert.ok(env.alerts.some(a => /fix these lines/.test(a)));
+  assert.strictEqual(reopened, "abc", "your lines are still there to fix");
+  doc.click(10, 10);
+  assert.ok(/10\.00  T/.test(doc._annots[0].contents));
 });
 
 test("double-click a tape: the calculator opens filled in, and Update changes the tape in place", () => {
   const env = makeEnv(); const doc = new env.Doc(2);
   const tape = makeTape(env, doc, { titl: "Rent", ents: "250 x 12\n-500 credit", init: "GR" }, 60, 600);
   const name = tape.name; const top = tape.rect[3]; const left = tape.rect[0];
+  const n = env.dialogs.length;
   doc.press("ART_TBTN." + name.slice(6), 80, 560);
-  assert.strictEqual(doc.calc("entr"), null, "a single click doesn't open it");
+  assert.strictEqual(env.dialogs.length, n, "a single click doesn't open it");
+  let seen;
+  env.dialogScripts.push(ui => {
+    seen = { titl: ui.get("titl"), ents: ui.get("ents"), init: ui.get("init"), ok: okName(ui), totl: ui.get("totl"), name: ui.d.description.name };
+    ui.enter("100+");
+    return ui.ok();
+  });
   doubleClick(doc, tape, 80, 560);
-  assert.strictEqual(doc.calc("titl"), "Rent");
-  assert.strictEqual(doc.calc("ents"), "250 x 12\n-500 credit");
-  assert.strictEqual(doc.calc("init"), "GR");
-  assert.strictEqual(doc.calc("place"), "Update tape");
-  assert.strictEqual(doc.calc("totl"), "2,500.00");
-  doc.type("ART_CALC.entr", "100+");
-  doc.press("ART_CALC.place");
+  assert.deepStrictEqual(seen, { titl: "Rent", ents: "250 x 12\n-500 credit", init: "GR", ok: "Update tape", totl: "2,500.00", name: "Calculator Tape - change tape" });
   const after = doc._annots.filter(a => a.name.startsWith("ART:P:"));
   assert.strictEqual(after.length, 1, "same tape, not a new one");
   assert.strictEqual(after[0].name, name);
@@ -671,9 +687,10 @@ test("select a tape and click Calc Tape: opens it for changing", () => {
   const env = makeEnv(); const doc = new env.Doc(1);
   const tape = makeTape(env, doc, { ents: "5\n6" }, 60, 600);
   doc.selectedAnnots = [tape];
-  env.ART.run("calcTape", doc); env.runTimers();
-  assert.strictEqual(doc.calc("place"), "Update tape");
-  assert.strictEqual(doc.calc("ents"), "5\n6");
+  let seen;
+  env.dialogScripts.push(ui => { seen = [okName(ui), ui.get("ents")]; return "cancel"; });
+  env.ART.run("calcTape", doc);
+  assert.deepStrictEqual(seen, ["Update tape", "5\n6"]);
 });
 
 const trim2 = n => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -685,11 +702,13 @@ test("tapes made before 0.4.0 get a double-click button and open with their line
   env.ART.run("tagCheck", doc);                       // any command, or Acrobat's list of open PDFs
   env.runIntervals(1);
   assert.ok(doc._fields["ART_TBTN.oldtape"], "button added when its page is viewed");
+  let seen;
+  env.dialogScripts.push(ui => { seen = { titl: ui.get("titl"), init: ui.get("init"), ents: ui.get("ents"), totl: ui.get("totl") }; return "cancel"; });
   doubleClick(doc, old, 100, 450);
-  assert.strictEqual(doc.calc("titl"), "Old one");
-  assert.strictEqual(doc.calc("init"), "AB");
-  assert.strictEqual(doc.calc("ents"), "12,400.00 Cash\n-800.00 O/S cheque\n=\n250 x 4 Rent\n(50.00) fee\nx 1.1");
-  assert.strictEqual(doc.calc("totl"), trim2(computeTape("12,400 Cash\n-800 O/S cheque\n=\n250 x 4 Rent\n(50) fee\nx 1.1").total));
+  assert.strictEqual(seen.titl, "Old one");
+  assert.strictEqual(seen.init, "AB");
+  assert.strictEqual(seen.ents, "12,400.00 Cash\n-800.00 O/S cheque\n=\n250 x 4 Rent\n(50.00) fee\nx 1.1");
+  assert.strictEqual(seen.totl, trim2(computeTape("12,400 Cash\n-800 O/S cheque\n=\n250 x 4 Rent\n(50) fee\nx 1.1").total));
 });
 
 test("a posted tape reads back into the same lines", () => {
@@ -717,23 +736,15 @@ test("tape watcher: protected PDFs and closed PDFs don't cause trouble", () => {
   assert.strictEqual(env.ART._internal.watchState().docs.indexOf(doc), -1, "closed PDF forgotten");
 });
 
-test("calculator: + adds a highlighted amount too", () => {
-  const env = makeEnv(); const doc = new env.Doc(1);
-  env.ART.run("calcTape", doc); env.runTimers();
-  const f = doc._fields["ART_CALC.entr"];
-  f.value = "40";
-  doc.fire(f, "Keystroke", { change: "+", value: "40", selStart: 0, selEnd: 2, willCommit: false });
-  assert.strictEqual(doc.calc("totl"), "40.00");
-});
-
 test("a tape's text changed directly in Acrobat isn't undone by a later double-click edit", () => {
   const env = makeEnv(); const doc = new env.Doc(1);
   const tape = makeTape(env, doc, { titl: "Bank", ents: "12,400 Cash\n-800 O/S cheque" }, 50, 700);
   tape.contents = tape.contents.replace("Cash", "Cash at bank").replace(/\n/g, "\r");   // edited in the tape; Acrobat uses \r
   env.runIntervals(1);
+  let ents;
+  env.dialogScripts.push(ui => { ents = ui.get("ents"); ui.enter("5+"); return ui.ok(); });
   doubleClick(doc, tape, 70, 660);
-  assert.strictEqual(doc.calc("ents"), "12,400.00 Cash at bank\n-800.00 O/S cheque");
-  doc.type("ART_CALC.entr", "5+"); doc.press("ART_CALC.place");
+  assert.strictEqual(ents, "12,400.00 Cash at bank\n-800.00 O/S cheque");
   assert.ok(/Cash at bank/.test(tape.contents) && /11,605\.00  T/.test(tape.contents), tape.contents);
 });
 
@@ -760,57 +771,41 @@ test("a reference tag on a tape's figures still jumps to its match", () => {
   const tape = makeTape(env, doc, { ents: "1\n2\n3\n4\n5" }, 50, 700);
   refPairs(env, doc, [[0, 80, 650], [2, 300, 300]]);   // A-1 on the tape's total, its match on page 3
   doc.pageNum = 0;
+  const n = env.dialogs.length;
   doc.press(tapeBtn(doc, tape).name, 80, 650);
   assert.strictEqual(doc.pageNum, 2, "went to the match");
-  assert.strictEqual(doc.calc("entr"), null, "calculator didn't open");
+  assert.strictEqual(env.dialogs.length, n, "calculator didn't open");
 });
 
-test("calculator: the cursor comes back to Amount after it follows you to another page", () => {
-  const env = makeEnv(); const doc = new env.Doc(4);
-  env.ART.run("calcTape", doc); env.runTimers();
-  const f = doc._fields["ART_CALC.entr"];
-  doc.fire(f, "OnFocus", {});
-  env.focused = null;
-  doc.goTo(2); env.runTimers();
-  assert.strictEqual(env.focused, "ART_CALC.entr");
-  doc.fire(doc._fields["ART_CALC.entr"], "OnBlur", {});
-  env.focused = null;
-  doc.goTo(3); env.runTimers();
-  assert.strictEqual(env.focused, null, "not grabbed back if you'd clicked away");
-});
-
-test("calculator: another command doesn't lose the calculation; Calc Tape picks it up", () => {
+test("calculator: a tape whose click was abandoned is picked up by the next Calc Tape", () => {
   const env = makeEnv(); const doc = new env.Doc(3);
-  env.ART.run("calcTape", doc); env.runTimers();
-  doc.type("ART_CALC.titl", "Accruals"); doc.type("ART_CALC.entr", "100+200+3");
-  env.dialogResults.push({});
-  env.ART.run("placeTag", doc);                      // Reference tool started instead
-  assert.strictEqual(doc.calc("entr"), null);
-  env.ART.run("placeTag", doc);                      // finish it
-  env.ART.run("calcTape", doc); env.runTimers();
-  assert.strictEqual(doc.calc("totl"), "300.00");
-  assert.strictEqual(doc.calc("entr"), "3");
-  assert.strictEqual(doc.calc("titl"), "Accruals");
-  assert.ok(/Picked up/.test(doc.calc("info")));
-  // Place, then abandon the click: still kept.
-  doc.press("ART_CALC.place");
-  env.ART.run("tagCheck", doc); env.ART.run("repairTags", doc);
-  env.ART.run("calcTape", doc); env.runTimers();
-  assert.strictEqual(doc.calc("totl"), "303.00");
-  doc.press("ART_CALC.cancel");                      // Cancel really clears it
-  env.ART.run("calcTape", doc); env.runTimers();
-  assert.strictEqual(doc.calc("totl"), "");
+  env.dialogScripts.push(ui => { ui.type("titl", "Accruals"); ui.enter("100+200+3"); return ui.ok() || (ui.enter("") && ui.ok()); });
+  env.ART.run("calcTape", doc);
+  assert.ok(doc.getField("ART_CAP.p0"), "waiting for the click");
+  env.ART.run("repairTags", doc);                     // something else instead of the click
+  let seen;
+  env.dialogScripts.push(ui => { seen = { totl: ui.get("totl"), titl: ui.get("titl"), stat: ui.get("stat") }; return "cancel"; });
+  env.ART.run("calcTape", doc);
+  assert.deepStrictEqual([seen.totl, seen.titl], ["303.00", "Accruals"]);
+  assert.ok(/Picked up/.test(seen.stat), seen.stat);
+  env.dialogScripts.push(ui => { seen = { totl: ui.get("totl") }; return "cancel"; });
+  env.ART.run("calcTape", doc);
+  assert.strictEqual(seen.totl, "", "Cancel then Calc Tape starts afresh");
+  // Clicking Calc Tape while the tape is waiting for its click also brings it back.
+  env.dialogScripts.push(ui => { ui.enter("7+"); return ui.enter("") && ui.ok(); });
+  env.ART.run("calcTape", doc);
+  env.dialogScripts.push(ui => { seen = { totl: ui.get("totl") }; return "cancel"; });
+  env.ART.run("calcTape", doc);
+  assert.strictEqual(seen.totl, "7.00");
 });
 
-test("calculator: - on a highlighted amount starts a negative number instead of subtracting", () => {
+test("fields left by 0.4.0's on-page calculator are tidied away", () => {
   const env = makeEnv(); const doc = new env.Doc(1);
-  env.ART.run("calcTape", doc); env.runTimers();
-  const f = doc._fields["ART_CALC.entr"];
-  f.value = "1250";
-  const ev = { change: "-", value: "1250", selStart: 0, selEnd: 4, willCommit: false, rc: true, target: f };
-  new (vm.runInContext("Function", env.ctx))("event", f.actions.Keystroke).call(doc, ev);
-  assert.strictEqual(ev.change, "-", "typed as a minus sign");
-  assert.strictEqual(doc.calc("ents"), "");
+  doc.addField("ART_CALC.entr", "text", 0, [270, 780, 600, 760]).setAction("Keystroke", "if(typeof ARTool!=='undefined'){ARTool._calcKey(this,event);}");
+  doc.addField("ART_CALC.place", "button", 0, [270, 740, 400, 720]).setAction("MouseUp", "if(typeof ARTool!=='undefined'){ARTool._calcBtn(this,'place');}");
+  doc.type("ART_CALC.entr", "5"); env.runTimers();
+  assert.strictEqual(doc.fieldNames().length, 0);
+  assert.strictEqual(env.alerts.length, 0);
 });
 
 test("invisible buttons left by deleted tapes are tidied when the PDF is next used", () => {
@@ -832,8 +827,10 @@ test("two tapes with the same name (page inserted from a copy) both keep working
   doc.addField("ART_TBTN." + t1.name.slice(6), "button", 2, [55, 680, 100, 660]);   // Acrobat merges the buttons
   doc.goTo(2); doc.goTo(0); doc.goTo(2);
   assert.strictEqual(tapeBtn(doc, t1).widgets.length, 2, "shared button left alone");
+  let titl;
+  env.dialogScripts.push(ui => { titl = ui.get("titl"); return "cancel"; });
   doc.press(tapeBtn(doc, t1).name, 70, 670); doc.press(tapeBtn(doc, t1).name, 70, 670);
-  assert.strictEqual(doc.calc("titl"), "Copy", "opens the tape on the page you're looking at");
+  assert.strictEqual(titl, "Copy", "opens the tape on the page you're looking at");
   assert.ok(t2);
 });
 
@@ -892,11 +889,12 @@ test("clicking on a tape while placing a reference places the tag there", () => 
   const env = makeEnv(); const doc = new env.Doc(2);
   const tape = makeTape(env, doc, { ents: "1\n2\n3\n4" }, 50, 700);
   env.ART.run("placeTag", doc);
+  const n = env.dialogs.length;
   const b = tapeBtn(doc, tape);
   doc.press(b.name, 70, 660);
   const tag = doc._annots.find(a => a.name === "ART:T:A-1:1");
   assert.ok(tag && tag.rect[0] < 70 && tag.rect[2] > 70, "tag placed where clicked");
-  assert.strictEqual(doc.calc("entr"), null, "calculator didn't open");
+  assert.strictEqual(env.dialogs.length, n, "calculator didn't open");
   env.ART.run("placeTag", doc);
 });
 

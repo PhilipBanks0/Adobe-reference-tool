@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1 - 2026-09-25
+
+- **Calc Tape is a pop-up window again**, instead of sitting on the page. Acrobat's windows only notice Enter, not single keys, so the calculator keys now take effect when you press **Enter**:
+  - `12400+` then Enter adds 12,400. `800-` then Enter subtracts 800. A number on its own then Enter adds it.
+  - `250*12+` then Enter adds 3,000. `*1.05` then Enter multiplies the total so far.
+  - You can type several at once: `12400+800-250*12+` then Enter puts three lines on the tape.
+  - `250*` then Enter leaves `250 x` in the box, waiting for the next number.
+  - The `/` in `O/S` and the `-` in `Year-end` still type normally, and anything the calculator can't read stays in the box with an explanation.
+- The tape preview and total update on each Enter, when you click **Undo line**, and when you click out of the lines box.
+- Enter on an empty Amount box places the tape (or updates it, when you're changing one).
+- Double-clicking a tape, resizing it, and everything else from 0.4.0 are unchanged.
+- If a PDF was saved while 0.4.0's on-page calculator was open, its leftover boxes are removed the first time you click them.
+
 ## 0.4.0 - 2026-09-25
 
 - **Calc Tape now works like a 10-key adding machine.** The calculator opens on the page itself (top-right corner) instead of a pop-up window, so it can react to each key the moment you press it:

@@ -80,7 +80,7 @@ var ART_laterTimer = null;  // runs work just after a button or keystroke event 
 var ART_watchTimer = null;  // tape watcher
 
 var ARTool = (function () {
-    var VERSION = "0.4.0";
+    var VERSION = "0.4.1";
     var REPO = "PhilipBanks0/Adobe-reference-tool";
     var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
     var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -1040,7 +1040,6 @@ var ARTool = (function () {
 
     function cancelCapture(doc) {
         var old = capture;
-        if (old && old.mode === "calc") { stashCalc(old.doc, old.data); }
         capture = null;
         stopFollow();
         removeCaptureFields(doc);
@@ -1170,7 +1169,6 @@ var ARTool = (function () {
         if (!c || !c.follow) { stopFollow(); return; }
         var n;
         try { n = c.doc.pageNum; } catch (e) { capture = null; stopFollow(); return; } // document closed
-        if (c.mode === "calc") { calcFollow(c, n); return; }
         if (!coverNear(c, n)) { refreshNear(c, n); }
     }
 
@@ -1540,7 +1538,6 @@ var ARTool = (function () {
 
     function placeTag(doc) {
         // The same button starts and stops reference mode.
-        if (capture && capture.mode === "calc") { cancelCapture(doc); }
         if (capture) {
             if (capture.mode === "ref") { stopReferenceMode(doc); } else { cancelCapture(doc); }
             return;
@@ -1633,151 +1630,14 @@ var ARTool = (function () {
     }
 
     // -----------------------------------------------------------------------
-    // Calc Tape: a calculator made of form fields at the top of the page.
-    // Acrobat's pop-up dialogs can't see single key presses, but a form
-    // field can, so + - * / act the moment they're pressed, like a 10-key
-    // adding machine. The panel follows the page being viewed. Double-
-    // clicking a tape opens it here to change it.
+    // Calc Tape: a pop-up calculator. Acrobat's dialogs only notice Enter,
+    // not single keys, so the Amount box is read when Enter is pressed:
+    // + - * / work like an adding machine's keys, and several can be typed
+    // in one go ("12400+800-250*12+" adds three lines). Double-clicking a
+    // tape opens it here to change it.
     // -----------------------------------------------------------------------
-    var CALC_W = 340;
-    var CALC_COLORS = {
-        panel: ["RGB", 0.9, 0.93, 0.98],
-        input: ["RGB", 1, 1, 1],
-        status: ["RGB", 1, 0.97, 0.8],
-        button: ["RGB", 0.8, 0.87, 0.97],
-        place: ["RGB", 0.8, 0.93, 0.8],
-        line: ["RGB", 0.2, 0.35, 0.6]
-    };
-    var CALC_HELP = "Amount, then  +  adds it,  -  subtracts it.    *  or  /  : times or divided by the next number.\n" +
-        "Enter adds the line (use Enter after a description, e.g. 800 O/S cheque).    =  then Enter: subtotal";
     var DOUBLE_CLICK_MS = 600;
-    var PREVIEW_LINES = 17;
-
-    function calcRows(editing) {
-        return [
-            { h: 18, cells: [["info", 230, "status"], ["undo", 58, "button", "Undo line", "Take the last line off the tape"], ["move", 52, "button", "Move", "Move the calculator to another corner of the page"]] },
-            { h: 17, cells: [["l_titl", 34, "label", "Title"], ["titl", 196, "text", "Title printed at the top of the tape"], ["l_init", 50, "label", "Initials"], ["init", 60, "text", "Your initials, printed under the total"]] },
-            { h: 22, cells: [["l_entr", 50, "label", "Amount"], ["entr", 290, "entry", "Type an amount, then + - * / or Enter"]] },
-            { h: 21, cells: [["help", 340, "help"]] },
-            { h: 150, cells: [["ents", 140, "lines", "The tape's lines. You can change them here; the tape updates when you click out of this box."], ["prev", 200, "preview"]] },
-            { h: 22, cells: [["l_totl", 40, "label", "Total"], ["totl", 110, "total"],
-                ["place", 120, "button", editing ? "Update tape" : "Place on page", editing ? "Save the changes to the tape" : "Then click where the tape should go"],
-                ["cancel", 70, "button", "Cancel", "Close the calculator without changing anything"]] }
-        ];
-    }
-
-    /** Where each part of the panel goes on page p: {id: [left, top, right, bottom]} in rotated space. */
-    function calcLayout(doc, p, corner, editing) {
-        var rows = calcRows(editing);
-        var H = 0;
-        var i;
-        for (i = 0; i < rows.length; i++) { H += rows[i].h; }
-        var b = doc.getPageBox("Crop", p);
-        var left = Math.min(b[0], b[2]);
-        var right = Math.max(b[0], b[2]);
-        var top = Math.max(b[1], b[3]);
-        var bottom = Math.min(b[1], b[3]);
-        var x0 = (corner === 2 || corner === 3) ? left + 6 : right - 6 - CALC_W;
-        var y0 = (corner === 1 || corner === 2) ? bottom + 4 + H : top - 4;
-        x0 = Math.max(left, x0);
-        var out = [];
-        var y = y0;
-        for (i = 0; i < rows.length; i++) {
-            var x = x0;
-            for (var j = 0; j < rows[i].cells.length; j++) {
-                var cell = rows[i].cells[j];
-                out.push({ id: cell[0], kind: cell[2], caption: cell[3], tip: cell[4], rect: [x, y, x + cell[1], y - rows[i].h] });
-                x += cell[1];
-            }
-            y -= rows[i].h;
-        }
-        return out;
-    }
-
-    function calcField(c, id) {
-        try { return c.doc.getField(CALC + "." + id); } catch (e) { return null; }
-    }
-
-    function setCalcValue(c, id, v) {
-        var f = calcField(c, id);
-        if (f && String(f.value) !== String(v)) { try { f.value = v; } catch (e) {} }
-    }
-
-    function styleCalc(f, fill, lw) {
-        try { f.borderStyle = border.s; } catch (e) {}
-        try { f.lineWidth = lw; } catch (e1) {}
-        try { f.strokeColor = lw ? CALC_COLORS.line : color.transparent; } catch (e2) {}
-        try { f.fillColor = fill; } catch (e3) {}
-        try { f.display = display.noPrint; } catch (e4) {}
-        try { f.textColor = ["RGB", 0.1, 0.1, 0.1]; } catch (e5) {}
-    }
-
-    function useCourier(f) { try { f.textFont = font.Cour; } catch (e) {} }
-
-    /** Build the panel on c.page. */
-    function renderCalc(c) {
-        var doc = c.doc;
-        var editing = !!c.data.editing;
-        var cells = calcLayout(doc, c.page, getGlobal("ART_calcCorner", 0) % 4, editing);
-        for (var i = 0; i < cells.length; i++) {
-            var cl = cells[i];
-            var name = CALC + "." + cl.id;
-            var f;
-            if (cl.kind === "button") {
-                f = doc.addField(name, "button", c.page, cl.rect);
-                styleCalc(f, cl.id === "place" ? CALC_COLORS.place : CALC_COLORS.button, 1);
-                try { f.textSize = 8; } catch (e) {}
-                try { f.highlight = highlight.p; } catch (e1) {}
-                try { f.buttonSetCaption(cl.caption); } catch (e2) {}
-                f.setAction("MouseUp", "if(typeof ARTool!=='undefined'){ARTool._calcBtn(this,'" + cl.id + "');}");
-            } else {
-                f = doc.addField(name, "text", c.page, cl.rect);
-                var ro = (cl.kind === "label" || cl.kind === "status" || cl.kind === "help" || cl.kind === "preview" || cl.kind === "total");
-                var fill = cl.kind === "status" ? CALC_COLORS.status : (ro && cl.kind !== "preview" ? CALC_COLORS.panel : CALC_COLORS.input);
-                styleCalc(f, fill, (cl.kind === "label" || cl.kind === "help") ? 0 : 1);
-                try { f.textSize = { label: 8, status: 8, help: 6.5, preview: 7, total: 10, entry: 11, lines: 8, text: 9 }[cl.kind]; } catch (e3) {}
-                if (cl.kind === "help" || cl.kind === "preview" || cl.kind === "lines") { try { f.multiline = true; } catch (e4) {} }
-                if (cl.kind === "preview" || cl.kind === "lines") { useCourier(f); }
-                if (cl.kind === "total" || cl.kind === "label") { try { f.alignment = cl.kind === "total" ? "right" : "left"; } catch (e5) {} }
-                try { f.doNotSpellCheck = true; } catch (e6) {}
-                if (ro) {
-                    try { f.readonly = true; } catch (e7) {}
-                } else if (cl.kind === "entry") {
-                    f.setAction("Keystroke", "if(typeof ARTool!=='undefined'){ARTool._calcKey(this,event);}");
-                    f.setAction("OnFocus", "if(typeof ARTool!=='undefined'){ARTool._calcFocus(this,true);}");
-                    f.setAction("OnBlur", "if(typeof ARTool!=='undefined'){ARTool._calcFocus(this,false);}");
-                } else {
-                    f.setAction("Keystroke", "if(typeof ARTool!=='undefined'){ARTool._calcEdit(this,event,'" + cl.id + "');}");
-                }
-                if (cl.kind === "label") { try { f.value = cl.caption; } catch (e8) {} }
-                if (cl.kind === "help") { try { f.value = CALC_HELP; } catch (e9) {} }
-            }
-            if (cl.tip) { try { f.userName = cl.tip; } catch (e10) {} }
-        }
-        refreshCalc(c);
-    }
-
-    function calcStatusDefault(c) {
-        return c.data.editing ? "Editing this tape: change it, then click Update tape" : "Calc Tape: type an amount, then + - * / or Enter";
-    }
-
-    /** Show the latest tape, total and message. skip = the field being edited right now (leave it alone). */
-    function refreshCalc(c, skip) {
-        var d = c.data;
-        var p = tapePreview(d);
-        var lines = p.text ? p.text.split("\n") : [];
-        if (lines.length > PREVIEW_LINES) { lines = ["..."].concat(lines.slice(lines.length - PREVIEW_LINES + 1)); }
-        var vals = { info: d.status || calcStatusDefault(c), titl: d.titl || "", init: d.init || "", entr: d.entr || "",
-            ents: d.ents || "", prev: lines.join("\n"), totl: p.total };
-        for (var k in vals) {
-            if (vals.hasOwnProperty(k) && k !== skip) { setCalcValue(c, k, vals[k]); }
-        }
-    }
-
-    function focusEntry(c) {
-        var f = calcField(c, "entr");
-        if (f) { try { f.setFocus(); } catch (e) {} }
-    }
+    var PREVIEW_LINES = 30;
 
     /** Run work just after the current button click or keystroke has finished. */
     var laterQueue = [];
@@ -1798,11 +1658,9 @@ var ARTool = (function () {
         }
     }
 
-    function isCalc(c, doc) { return !!(c && c.mode === "calc" && c.doc === doc); }
-
     /**
-     * A calculation interrupted by another command (or a tape waiting to be
-     * placed) is kept, so the next Calc Tape picks it up instead of losing it.
+     * A tape waiting to be placed is kept until it's on the page, so if the
+     * click is abandoned the next Calc Tape picks the calculation up again.
      */
     var calcStash = {};
     function stashCalc(doc, d) {
@@ -1810,55 +1668,16 @@ var ARTool = (function () {
         calcStash[docKey(doc)] = { titl: d.titl || "", ents: d.ents || "", entr: d.entr || "", init: d.init || "", editing: d.editing || null };
     }
 
-    function startCalc(doc, data, page) {
-        cancelCapture(doc);
-        data.entr = data.entr || "";
-        data.status = data.status || "";
-        var c = { doc: doc, mode: "calc", page: page, data: data, follow: false, pages: {}, want: null, focused: true };
-        capture = c;
-        renderCalc(c);
-        try {
-            ART_followTimer = app.setInterval("ARTool._followPage()", FOLLOW_MS);
-            c.follow = true;
-        } catch (e) {}
-        tip("calcpad",
-            "The calculator is at the top of the page, and it follows you from page to page.\n\n" +
-            "Type an amount and press + to add it or - to subtract it. * or / multiplies or divides by the next number " +
-            "(250 * 12 adds 3,000). Press Enter to add a line with a description, e.g. 800 O/S cheque.\n\n" +
-            "Click Place on page when you're done, then click where the tape goes. Double-click a tape later to change it.");
-        later(function () { if (capture === c) { focusEntry(c); } });
-    }
-
-    /** The panel follows the page being viewed (once the user has stayed there a moment). */
-    function calcFollow(c, n) {
-        if (n === c.page) { c.want = null; return; }
-        if (!c.want || c.want.page !== n) { c.want = { page: n, ticks: 1 }; return; }
-        c.want.ticks++;
-        if (c.want.ticks < 2) { return; }
-        c.want = null;
-        moveCalc(c, n);
-    }
-
-    function moveCalc(c, n, focus) {
-        // If the cursor was in the Amount box, put it back there on the new page.
-        var refocus = focus || c.focused;
-        removeCaptureFields(c.doc);
-        c.page = n;
-        renderCalc(c);
-        if (refocus) { later(function () { if (capture === c) { focusEntry(c); } }); }
-    }
-
-    /** Add one line to the tape if it can be read. Shows what happened in the status line. */
-    function addCalcLine(c, line) {
-        var d = c.data;
+    /** Add one line to the tape if it can be read. Says what happened in d.status. */
+    function addCalcLine(d, line) {
         var base = d.ents ? String(d.ents).replace(/[\r\n\s]+$/, "") : "";
         var ents = base ? base + "\n" + line : line;
         var before = realErrors(computeTape(base)).length;
         var calc = computeTape(ents);
-        if (realErrors(calc).length > before) {
-            var errs = realErrors(calc);
+        var errs = realErrors(calc);
+        if (errs.length > before) {
             d.status = /multiply or divide/.test(errs[errs.length - 1]) ?
-                "Start with an amount; * and / work on the total so far" :
+                "Start with an amount: * and / work on the total so far" :
                 "Can't read \"" + line + "\": type an amount, e.g. 1,250.00 or 800 O/S cheque";
             return false;
         }
@@ -1867,113 +1686,175 @@ var ARTool = (function () {
         return true;
     }
 
-    /** Enter in the Amount box: add what's there as a line. */
-    function calcEnter(c, text) {
-        var s = trim(text);
-        if (!s) { return true; }
-        if (new RegExp("^(?:" + MULOP + "|.*\\s*" + MULOP + ")$").test(s) && !/[A-Za-z]{2}/.test(s)) {
-            c.data.status = "Type the number after " + s.slice(-1) + ", then press Enter";
-            return false;
-        }
-        return addCalcLine(c, s);
+    /** True for an amount still waiting for the number after x or / (e.g. "250 x"). */
+    function waitingForNumber(s) {
+        s = trim(s);
+        return new RegExp("^(?:" + MULOP + "|.*\\s*" + MULOP + ")$").test(s) && !/[A-Za-z]{2}/.test(s);
     }
 
-    /** Keystrokes in the Amount box. */
-    function calcKey(doc, ev) {
-        rememberDoc(doc);
-        var c = capture;
-        if (!isCalc(c, doc)) {
-            if (!(c && c.doc === doc)) { later(function () { if (!capture) { removeCaptureFields(doc); } }); }
-            return;
-        }
-        var d = c.data;
-        if (ev.willCommit) {
-            d.entr = String(ev.value || "");
-            if (ev.commitKey === 2) {                 // Enter
-                if (trim(d.entr) && calcEnter(c, d.entr)) { d.entr = ""; }
-                later(function () { if (capture === c) { refreshCalc(c); focusEntry(c); } });
+    /**
+     * Enter in the Amount box: read what was typed as if each key had been
+     * pressed on an adding machine, then Enter. What can't be added stays in
+     * the box (d.entr) with an explanation in d.status.
+     */
+    function runEntry(d, text) {
+        var s = String(text || "");
+        var box = "";
+        for (var i = 0; i < s.length; i++) {
+            var ch = s.charAt(i);
+            var act = "+-*/".indexOf(ch) >= 0 ? calcKeyAction(box, ch) : null;
+            if (act && act.line && !addCalcLine(d, act.line)) {
+                d.entr = box + s.slice(i);
+                return false;
             }
-            return;
-        }
-        var val = String(ev.value || "");
-        var ch = String(ev.change || "");
-        var ss = Number(ev.selStart);
-        var se = Number(ev.selEnd);
-        if (!(ss >= 0)) { ss = val.length; }
-        if (!(se >= ss)) { se = ss; }
-        var act = null;
-        // Only at the end of what's typed, so "O/S" or "Year-end" type normally. With the whole
-        // amount highlighted, + * / still act on it, but - starts a negative number in its place.
-        if (ch.length === 1 && "+-*/".indexOf(ch) >= 0 && se === val.length && (ss === se || (ss === 0 && ch !== "-"))) {
-            act = calcKeyAction(val, ch);
-        }
-        if (act && act.line && !addCalcLine(c, act.line)) {
-            ev.rc = false;                            // couldn't read it: leave the box as it is
-            refreshCalc(c, "entr");
-            return;
-        }
-        if (act) {
-            ev.selStart = 0;
-            ev.selEnd = val.length;
-            ev.change = act.next;
-            d.entr = act.next;
-            if (!act.line) { d.status = trim(act.next) + " ...  type the next number"; }
-            refreshCalc(c, "entr");
-            return;
-        }
-        d.entr = val.slice(0, ss) + ch + val.slice(se);
-    }
-
-    /** Title, Initials and the tape lines: keep up with typing; refresh the tape when the box is left. */
-    function calcEdit(doc, ev, id) {
-        var c = capture;
-        if (!isCalc(c, doc)) { return; }
-        var d = c.data;
-        if (ev.willCommit) {
-            d[id] = String(ev.value || "");
-            if (id === "ents") { d.status = ""; }
-            refreshCalc(c, id);
-            if (ev.commitKey === 2 && id !== "ents") { later(function () { if (capture === c) { focusEntry(c); } }); }
-            return;
-        }
-        var val = String(ev.value || "");
-        var ss = Number(ev.selStart);
-        var se = Number(ev.selEnd);
-        if (!(ss >= 0)) { ss = val.length; }
-        if (!(se >= ss)) { se = ss; }
-        d[id] = val.slice(0, ss) + String(ev.change || "") + val.slice(se);
-    }
-
-    function endCalc(c) {
-        if (capture === c) { capture = null; }
-        stopFollow();
-        var doc = c.doc;
-        later(function () { if (!capture || capture.doc !== doc) { removeCaptureFields(doc); } });
-    }
-
-    function calcPlace(c) {
-        var d = c.data;
-        var doc = c.doc;
-        // A number still in the Amount box goes on the tape too (a lone "x" waiting for its number doesn't).
-        if (trim(d.entr) && !new RegExp("^" + MULOP + "$").test(trim(d.entr))) {
-            if (!calcEnter(c, d.entr)) { refreshCalc(c); return; }
+            if (act) { box = act.next; } else { box += ch; }
         }
         d.entr = "";
-        var calc = computeTape(d.ents);
-        if (calc.errors.length) {
-            d.status = calc.errors[0] === EMPTY_TAPE ? "Type at least one amount first" : "Fix the lines: " + calc.errors[0];
-            refreshCalc(c);
-            return;
+        if (!trim(box)) { return true; }
+        if (waitingForNumber(box)) {
+            d.entr = trim(box) + " ";
+            d.status = trim(box) + " ...  type the next number, then press Enter";
+            return false;
+        }
+        if (!addCalcLine(d, trim(box))) { d.entr = box; return false; }
+        return true;
+    }
+
+    function previewText(d) {
+        var p = tapePreview(d);
+        var lines = p.text ? p.text.split("\n") : [];
+        if (lines.length > PREVIEW_LINES) { lines = ["..."].concat(lines.slice(lines.length - PREVIEW_LINES + 1)); }
+        return { text: lines.join("\n"), total: p.total };
+    }
+
+    var CALC_HINTS = [
+        "Type an amount and press Enter:   12400+  adds,   800-  subtracts.",
+        "250*12+  adds 250 x 12.     *1.05  or  /2  works on the total so far.",
+        "Several at once:  12400+800-250*12+      Descriptions:  800 O/S cheque"
+    ];
+
+    /** The calculator window. Returns d filled in, or null if cancelled. */
+    function tapeDialog(d) {
+        function status() {
+            return d.status || (d.editing ? "Changing this tape: edit it, then click Update tape" : "Type an amount, then Enter");
+        }
+        function show(dlg, focusAmount) {
+            var p = previewText(d);
+            dlg.load({ prev: p.text, totl: p.total, stat: status(), ents: d.ents || "", entr: d.entr || "" });
+            if (focusAmount) { try { dlg.focus("entr"); } catch (e) {} }
+        }
+        function read(dlg) {
+            var r = dlg.store();
+            d.titl = r.titl || "";
+            d.init = r.init || "";
+            d.ents = r.ents || "";
+            d.entr = r.entr || "";
+        }
+        var desc = {
+            initialize: function (dlg) {
+                dlg.load({ titl: d.titl || "", init: d.init || "" });
+                show(dlg, true);
+            },
+            // Acrobat runs these when you leave a box after changing it.
+            ents: function (dlg) { read(dlg); d.status = ""; show(dlg); },
+            titl: function (dlg) { read(dlg); show(dlg); },
+            init: function (dlg) { read(dlg); show(dlg); },
+            undo: function (dlg) {
+                read(dlg);
+                var lines = String(d.ents || "").replace(/[\r\n\s]+$/, "").split(/\r\n|\r|\n/);
+                var gone = lines.pop();
+                d.ents = lines.join("\n");
+                d.status = gone ? "Took off " + trim(gone) : "The tape is empty";
+                show(dlg, true);
+            },
+            /*
+             * Enter presses the default button, so "validate" is where the
+             * Amount box is read. Returning false keeps the window open for
+             * the next number. Enter on an empty box places the tape.
+             */
+            validate: function (dlg) {
+                read(dlg);
+                if (!trim(d.entr)) { return true; }
+                runEntry(d, d.entr);
+                show(dlg, true);
+                return false;
+            },
+            commit: function (dlg) { read(dlg); },
+            description: {
+                name: d.editing ? "Calculator Tape - change tape" : "Calculator Tape",
+                elements: [{
+                    type: "view",
+                    align_children: "align_row",
+                    elements: [
+                        {
+                            type: "view",
+                            align_children: "align_left",
+                            elements: [
+                                { type: "static_text", name: "Title:" },
+                                { type: "edit_text", item_id: "titl", width: 300 },
+                                { type: "static_text", name: CALC_HINTS[0] },
+                                { type: "static_text", name: CALC_HINTS[1] },
+                                { type: "static_text", name: CALC_HINTS[2] },
+                                {
+                                    type: "view",
+                                    align_children: "align_row",
+                                    elements: [
+                                        { type: "edit_text", item_id: "entr", width: 220 },
+                                        { type: "button", item_id: "undo", name: "Undo line" }
+                                    ]
+                                },
+                                { type: "static_text", name: "Tape lines (you can edit these too):" },
+                                { type: "edit_text", item_id: "ents", multiline: true, width: 300, height: 180 },
+                                {
+                                    type: "view",
+                                    align_children: "align_row",
+                                    elements: [
+                                        { type: "static_text", name: "Initials:" },
+                                        { type: "edit_text", item_id: "init", width: 60 },
+                                        { type: "static_text", name: "   Total:" },
+                                        { type: "edit_text", item_id: "totl", readonly: true, width: 110 }
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            type: "view",
+                            align_children: "align_left",
+                            elements: [
+                                { type: "edit_text", item_id: "stat", readonly: true, width: 330 },
+                                { type: "static_text", name: "Tape:" },
+                                { type: "edit_text", item_id: "prev", multiline: true, readonly: true, width: 330, height: 300 }
+                            ]
+                        }
+                    ]
+                }, { type: "ok_cancel", ok_name: d.editing ? "Update tape" : "Place on page" }]
+            }
+        };
+        return app.execDialog(desc) === "ok" ? d : null;
+    }
+
+    /** Open the calculator (new, or changing a tape) and act on the result. */
+    function openCalc(doc, d) {
+        if (capture) { cancelCapture(doc); }
+        d.entr = d.entr || "";
+        while (true) {
+            var r = tapeDialog(d);
+            if (!r) { return; }
+            var calc = computeTape(d.ents);
+            if (calc.errors.length) {
+                app.alert(calc.errors[0] === EMPTY_TAPE ? "Type at least one amount first." :
+                    "Please fix these lines:\n\n" + calc.errors.join("\n"));
+                d.status = "";
+                continue;
+            }
+            break;
         }
         setGlobal("ART_initials", d.init || "");
         var text = formatTape(d.titl, calc, d.init);
-        var src = { titl: trim(d.titl || ""), ents: String(d.ents).replace(/\r\n|\r/g, "\n"), init: trim(d.init || "") };
-        endCalc(c);
-        stashCalc(doc, d);                          // until the tape is on the page
+        var src = { titl: trim(d.titl || ""), ents: String(d.ents).replace(/\r\n|\r/g, "\n").replace(/\s+$/, ""), init: trim(d.init || "") };
         if (d.editing) {
             var a = findTape(doc, d.editing, d.editPage);
             if (a) {
-                delete calcStash[docKey(doc)];
                 var reg = loadReg(doc);
                 sync(doc, reg);
                 updateTape(doc, reg, a, text, src);
@@ -1982,37 +1863,17 @@ var ARTool = (function () {
             }
             // The tape was deleted meanwhile: place it as a new one.
         }
-        later(function () {
-            startCapture(doc, "tape", { text: text, src: src }, "tape",
-                "Click where the top-left corner of the tape should go.\n\n" +
-                "Afterwards: drag the tape by its title line or edge to move it, drag a corner to resize it, " +
-                "and double-click its figures to change them.");
-        });
+        stashCalc(doc, d);                            // until the tape is on the page
+        startCapture(doc, "tape", { text: text, src: src }, "tape",
+            "Click where the top-left corner of the tape should go.\n\n" +
+            "Afterwards: drag the tape by its title line or edge to move it, drag a corner to resize it, " +
+            "and double-click its figures to change them.");
     }
 
-    function calcButton(doc, id) {
+    /** Fields left in a PDF saved while 0.4.0's on-page calculator was open: tidy them away. */
+    function strayCalcField(doc) {
         rememberDoc(doc);
-        var c = capture;
-        if (!isCalc(c, doc)) {
-            if (!(c && c.doc === doc)) { later(function () { if (!capture) { removeCaptureFields(doc); } }); }
-            return;
-        }
-        var d = c.data;
-        if (id === "place") { calcPlace(c); return; }
-        if (id === "cancel") { delete calcStash[docKey(doc)]; endCalc(c); return; }
-        if (id === "undo") {
-            var lines = String(d.ents || "").replace(/[\r\n\s]+$/, "").split(/\r\n|\r|\n/);
-            var gone = lines.pop();
-            d.ents = lines.join("\n");
-            d.status = gone ? "Took off " + trim(gone) : "The tape is empty";
-            refreshCalc(c);
-            later(function () { if (capture === c) { focusEntry(c); } });
-            return;
-        }
-        if (id === "move") {
-            setGlobal("ART_calcCorner", (getGlobal("ART_calcCorner", 0) + 1) % 4);
-            later(function () { if (capture === c) { moveCalc(c, c.page, true); } });
-        }
+        later(function () { if (!capture || capture.doc !== doc) { removeCaptureFields(doc); } });
     }
 
     function selectedTape(doc) {
@@ -2039,15 +1900,6 @@ var ARTool = (function () {
 
     /** Open the calculator on an existing tape, filled in with its lines. */
     function editTape(doc, name, page) {
-        var c = capture;
-        if (isCalc(c, doc)) {
-            if (c.data.editing !== name) {
-                c.data.status = "Finish this one first: click " + (c.data.editing ? "Update tape" : "Place on page") + " or Cancel";
-                refreshCalc(c);
-            }
-            later(function () { if (capture === c) { focusEntry(c); } });
-            return;
-        }
         var a = findTape(doc, name, page);
         if (!a) {
             later(function () { removeTapeButton(doc, name); });
@@ -2058,7 +1910,7 @@ var ARTool = (function () {
         // The saved lines, unless the tape's text was changed directly since (then read the tape itself).
         var src = (item.src && sameText(item.made, a.contents)) ? item.src : null;
         src = src || parseTapeText(a.contents) || { titl: "", ents: "", init: "" };
-        startCalc(doc, { titl: src.titl || "", ents: src.ents || "", init: src.init || "", editing: name, editPage: a.page }, a.page);
+        openCalc(doc, { titl: src.titl || "", ents: src.ents || "", init: src.init || "", editing: name, editPage: a.page });
     }
 
     /** Follow a reference tag's link by hand (for a tag that sits on a tape's figures). */
@@ -2077,7 +1929,7 @@ var ARTool = (function () {
         // A button shared by two same-named tapes reports all its pages: use the one being viewed.
         page = (typeof page === "number") ? page : doc.pageNum;
         var c = capture;
-        if (c && c.doc === doc && c.mode !== "calc") {
+        if (c && c.doc === doc) {
             // Placing something: this click is for that, as if the tape weren't there.
             onCapture(doc, Number(page), mx, my);
             return;
@@ -2095,23 +1947,17 @@ var ARTool = (function () {
     }
 
     function calcTape(doc) {
-        var c = capture;
-        if (isCalc(c, doc)) {
-            // Already open: bring it to this page.
-            if (c.page !== doc.pageNum) { moveCalc(c, doc.pageNum); }
-            later(function () { if (capture === c) { focusEntry(c); } });
-            return;
-        }
+        if (capture) { cancelCapture(doc); }
         var sel = selectedTape(doc);
         if (sel) { editTape(doc, sel.name, sel.page); return; }
         var kept = calcStash[docKey(doc)];
         if (kept) {
             delete calcStash[docKey(doc)];
-            kept.status = "Picked up where you left off (Cancel clears it)";
-            startCalc(doc, kept, doc.pageNum);
+            kept.status = "Picked up where you left off (Cancel, then Calc Tape again, to start afresh)";
+            openCalc(doc, kept);
             return;
         }
-        startCalc(doc, { titl: "", ents: "", init: getGlobal("ART_initials", ""), editing: null }, doc.pageNum);
+        openCalc(doc, { titl: "", ents: "", init: getGlobal("ART_initials", ""), editing: null });
     }
 
     function buildReport(doc, reg, present) {
@@ -2521,7 +2367,7 @@ var ARTool = (function () {
                 "Find these commands under Menu > Plugins > For editing > Reference Tool (new Acrobat) or Edit > Reference Tool (classic).\n\n" +
                 "Reference Tool: click it, then click a figure and click its match (any page). Numbers run on automatically; " +
                 "use the bar at the top of the page to Undo, change Options or finish (Done).\n" +
-                "Calc Tape: a calculator at the top of the page. Type an amount, then + or - (or * / by the next number); " +
+                "Calc Tape: type amounts with + - * / (e.g. 12400+800-250*12+) and press Enter; " +
                 "Place on page, then click where the tape goes. Double-click a tape to change it; drag a corner to resize it.\n" +
                 "Tag Check: list all tags and flag unmatched or broken ones.\n" +
                 "Replace Page: swap in a new version of a page and keep its tags.\n" +
@@ -2734,18 +2580,11 @@ var ARTool = (function () {
         _followPage: function () {
             try { followPage(); } catch (e) { stopFollow(); }
         },
-        _calcKey: function (doc, ev) {
-            try { calcKey(doc, ev); } catch (e) { showError("Calc Tape", e); }
-        },
-        _calcEdit: function (doc, ev, id) {
-            try { calcEdit(doc, ev, id); } catch (e) { showError("Calc Tape", e); }
-        },
-        _calcFocus: function (doc, on) {
-            if (capture && capture.mode === "calc" && capture.doc === doc) { capture.focused = !!on; }
-        },
-        _calcBtn: function (doc, id) {
-            try { calcButton(doc, id); } catch (e) { showError("Calc Tape", e); }
-        },
+        // Fields from 0.4.0's on-page calculator saved in a PDF: tidy them away if used.
+        _calcKey: function (doc) { try { strayCalcField(doc); } catch (e) {} },
+        _calcEdit: function (doc) { try { strayCalcField(doc); } catch (e) {} },
+        _calcFocus: function (doc) { try { strayCalcField(doc); } catch (e) {} },
+        _calcBtn: function (doc) { try { strayCalcField(doc); } catch (e) {} },
         _tapeClick: function (doc, name, page, x, y) {
             try { tapeClick(doc, name, page, x, y); } catch (e) { showError("Calc Tape", e); }
         },
@@ -2786,6 +2625,7 @@ var ARTool = (function () {
             getCapture: function () { return capture; },
             makeIcon: makeIcon,
             tapePreview: tapePreview,
+            runEntry: runEntry,
             icons: ICONS
         },
         installUI: function () {

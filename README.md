@@ -131,25 +131,26 @@ To jump between the two sides of a reference, click either tag with the normal H
 
 ### Calc Tape
 
-1. Go to the page where the tape should go and click **Calc Tape**. A calculator appears in the top-right corner of the page.
-2. Type amounts like on a 10-key adding machine. Each key acts as soon as you press it, and the tape and **Total** update straight away:
+1. Go to the page where the tape should go and click **Calc Tape**. The calculator window opens with the cursor in the Amount box.
+2. Type amounts the way you would on a 10-key adding machine, then press **Enter**. The tape and **Total** update each time you press Enter:
 
    ```
-   12400 +                        adds 12,400
-   800 -                          subtracts 800
-   250 * 12 +                     adds 3,000 (250 x 12)
-   * 1.05 +                       multiplies the total so far by 1.05
-   / 2 +                          divides the total so far by 2
-   800 O/S cheque      Enter      a line with a description
-   =                   Enter      subtotal
+   12400+                     Enter    adds 12,400
+   800-                       Enter    subtracts 800
+   250*12+                    Enter    adds 3,000 (250 x 12)
+   *1.05                      Enter    multiplies the total so far by 1.05
+   /2                         Enter    divides the total so far by 2
+   800 O/S cheque             Enter    a line with a description
+   =                          Enter    subtotal
+   12400+800-250*12+          Enter    several lines at once
    ```
 
-   - **+** and **-** act on the number you just typed. **\*** and **/** act on the next number.
-   - The keys only act after a plain number, so descriptions such as `O/S` or `Year-end` type normally. Press **Enter** to add a line with a description.
-   - Negatives: `(800)` or start the number with `-`.
+   - **+** and **-** act on the number just before them. **\*** and **/** act on the number after them. A number with no sign is added.
+   - `250*` then Enter leaves `250 x` in the box, waiting for the next number.
+   - Descriptions such as `O/S` or `Year-end` type normally. Anything the calculator can't read stays in the box with an explanation.
+   - Negatives: `(800)`, or start the number with `-`.
    - **Undo line** takes the last line off. You can also edit the lines in the box on the left; the tape updates when you click out of it.
-   - **Move** puts the calculator in another corner. It follows you as you move from page to page.
-3. Click **Place on page**. Anything still in the Amount box is added first.
+3. Press **Enter** on the empty Amount box, or click **Place on page**. If there's still a number in the box, Place on page adds it first; click it again to finish.
 4. Click where the top-left corner of the tape should go.
 
 The tape records your initials and the date. After it's placed:
@@ -158,7 +159,7 @@ The tape records your initials and the date. After it's placed:
 - **Move it:** drag it by its title line or edge.
 - **Resize it:** drag a corner or edge. The text grows or shrinks to fit, so nothing is cut off.
 
-If another command interrupts a calculation, click **Calc Tape** again to pick it up where you left off. **Cancel** throws it away.
+If you don't click to place a tape (you start something else instead), click **Calc Tape** again to pick it up where you left off.
 
 ### Tag Check
 
@@ -237,8 +238,7 @@ The mock can't show how Acrobat itself behaves, so a manual check in Acrobat Pro
   - If the height is off, set `mouseYFromTop: true`.
 - [ ] Clicking a tag jumps to its match, and back again.
 - [ ] Calc Tape: the tape's columns line up in a monospaced font.
-- [ ] Calc Tape: + - * / act the moment they're pressed, and the Amount box clears; Enter keeps the cursor in the box.
-- [ ] Calc Tape: scroll to another page. The calculator follows, with the cursor back in Amount.
+- [ ] Calc Tape: `12400+800-250*12+` then Enter adds three lines, the Amount box clears, and the cursor stays in it.
 - [ ] Double-click a tape's figures: the calculator opens filled in; Update tape changes it in place.
 - [ ] Drag a tape's corner smaller and larger: the text re-fits and isn't cut off. Drag it by the title line to move it.
 - [ ] A reference tag placed on a tape's total still jumps to its match.
