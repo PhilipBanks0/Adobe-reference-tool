@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.7 - 2026-09-25
+
+- Version bump.
+
 ## 0.3.6 - 2026-09-25
 
 - **Fixed: clicking Yes to install an update from Acrobat did nothing.** Acrobat only passes a link to Windows if that link type is on its allowed list, and the updater link wasn't. The Windows installer now adds it, in the same permission prompt it already shows. Each update adds it back if an Acrobat update removed it, and the uninstaller takes it out.
