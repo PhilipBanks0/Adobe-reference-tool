@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2 - 2026-09-25
+
+- **Deleting references is one click each.** Click **Delete** on the reference bar (it turns pink), then click the tags you want gone. Each click deletes that reference straight away, both of its tags and their links. There's no Yes/No/Cancel question any more.
+  - Delete stays on, so you can click one tag after another. Click **Delete** again to go back to placing.
+  - **Undo** puts the last deleted reference back where it was, with the same number, colour and size and a working link. Undo goes back through what you did in order, placing and deleting alike.
+  - The bar tells you what happened (`A-3 deleted  -  Undo puts it back`). Clicking beside a tag says so on the bar instead of opening a pop-up.
+- **Menu → Reference Tool → Delete Tag** works the same way and now has **Undo** on its bar too. Used while you're placing references, it switches the bar's Delete on.
+- Putting just one tag of a reference somewhere else is now done with **Move Tag**. A tag you left waiting to be put back with 0.4.1's "No" is still asked for first the next time you start the Reference tool.
+
 ## 0.4.1 - 2026-09-25
 
 - **Calc Tape is a pop-up window again**, instead of sitting on the page. Acrobat's windows only notice Enter, not single keys, so the calculator keys now take effect when you press **Enter**:

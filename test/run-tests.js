@@ -999,69 +999,234 @@ test("Move Tag moves the tag and its link", () => {
   assert.ok(links2[0].rect[0] < 400 && links2[0].rect[2] > 400);
 });
 
-test("Delete Tag: click a tag, delete both sides and links", () => {
+const tagNamed = (doc, n) => doc._annots.find(a => a.name === n);
+const linkOn = (doc, page) => doc._links.find(l => l.page === page);
+
+test("Delete Tag: each click deletes a whole reference straight away, no questions", () => {
   const env = makeEnv(); const doc = new env.Doc(4);
-  refPairs(env, doc, [[0, 100, 100], [2, 300, 300]]);
+  refPairs(env, doc, [[0, 100, 100], [2, 300, 300], [1, 200, 200], [3, 400, 400]]);   // A-1 p.1/p.3, A-2 p.2/p.4
   env.ART.run("deleteTag", doc);
   doc.goTo(0); doc.goTo(3);
   assert.ok(doc.getField("ART_CAP.p0") && doc.getField("ART_CAP.p3"), "click anywhere in the document");
-  assert.ok(/Click a tag to delete/.test(doc.status()));
-  env.alertAnswers.push(4);                 // Yes: both
-  doc.click(300, 300, 2);                   // click the match on page 3
+  assert.ok(/Click a tag to delete it/.test(doc.status()), doc.status());
+  const alerts = env.alerts.length;
+  doc.click(300, 300, 2);                   // A-1's match on page 3
+  assert.deepStrictEqual(names(doc), ["ART:T:A-2:1", "ART:T:A-2:2"], "both A-1 tags gone");
+  assert.ok(!linkOn(doc, 0) && !linkOn(doc, 2), "and their links");
+  assert.ok(/A-1 deleted .*Undo/.test(doc.status()), doc.status());
+  doc.click(200, 200, 1);                   // still deleting: the next click deletes A-2
   assert.strictEqual(doc._annots.length, 0);
   assert.strictEqual(doc._links.length, 0);
+  assert.strictEqual(env.alerts.length, alerts, "no pop-ups while deleting");
   doc.bar("done");
   assert.strictEqual(doc.fieldNames().length, 0);
   env.ART.run("repairTags", doc);
   assert.strictEqual(doc._annots.length, 0, "repair doesn't resurrect deleted tags");
 });
 
-test("Delete Tag: clicking empty space explains and deletes nothing", () => {
+test("Delete Tag: Undo on the bar puts deleted references back, links and all", () => {
+  const env = makeEnv(); const doc = new env.Doc(4);
+  refPairs(env, doc, [[0, 100, 100], [2, 300, 300], [1, 200, 200], [3, 400, 400]],
+    { colr: { Red: -1, Blue: 1, Green: -1, Black: -1 }, size: { Small: -1, Medium: -1, Large: 1 } });
+  const before = doc._annots.map(a => a.name + " " + a.page + " " + a.rect.join(",")).sort();
+  env.ART.run("deleteTag", doc);
+  doc.click(300, 300, 2);                   // A-1
+  doc.click(400, 400, 3);                   // A-2
+  assert.strictEqual(doc._annots.length, 0);
+  doc.bar("undo");
+  assert.deepStrictEqual(names(doc), ["ART:T:A-2:1", "ART:T:A-2:2"], "last one first");
+  assert.ok(/A-2 put back/.test(doc.status()), doc.status());
+  doc.bar("undo");
+  assert.deepStrictEqual(doc._annots.map(a => a.name + " " + a.page + " " + a.rect.join(",")).sort(), before, "same places");
+  const t = tagNamed(doc, "ART:T:A-1:1");
+  assert.strictEqual(t.textSize, 10, "same size");
+  assert.strictEqual(JSON.stringify(t.strokeColor), JSON.stringify(["RGB", 0, 0.25, 0.75]), "same colour");
+  assert.strictEqual(t.readOnly, true);
+  doc.pageNum = 1;
+  assert.strictEqual(followLink(env, doc, linkOn(doc, 0)), 2, "A-1 jumps to its match again");
+  assert.strictEqual(followLink(env, doc, linkOn(doc, 3)), 1, "A-2 too");
+  doc.bar("undo");
+  assert.ok(/Nothing left to undo/.test(doc.status()), doc.status());
+  assert.strictEqual(doc._annots.length, 4);
+  doc.bar("done");
+  assert.strictEqual(JSON.parse(doc.info.ARTRegister).items["ART:T:A-1:2"].page, 2, "register knows they're back");
+});
+
+test("Delete Tag: clicking empty space says so on the bar, no pop-up, and deletes nothing", () => {
   const env = makeEnv(); const doc = new env.Doc(2);
   refPairs(env, doc, [[0, 100, 100], [1, 100, 100]]);
   env.ART.run("deleteTag", doc);
+  const alerts = env.alerts.length;
   doc.click(400, 600, 0);
-  assert.ok(env.alerts.some(a => /no reference tag there/i.test(a)));
+  assert.ok(/No tag there/.test(doc.status()), doc.status());
+  assert.strictEqual(env.alerts.length, alerts);
   assert.strictEqual(doc._annots.length, 2);
+  doc.click(100, 100, 0);                   // still on: a click on the tag deletes it
+  assert.strictEqual(doc._annots.length, 0);
 });
 
-test("Delete Tag: 'just this one' then re-place it in reference mode", () => {
-  const env = makeEnv(); const doc = new env.Doc(4);
-  refPairs(env, doc, [[0, 100, 100], [2, 300, 300]]);
+test("Delete Tag deletes an unmatched tag on its own", () => {
+  const env = makeEnv(); const doc = new env.Doc(3);
+  refPairs(env, doc, [[0, 100, 100], [1, 100, 100], [2, 50, 50]]);   // A-1 pair + A-2 waiting for its match
   env.ART.run("deleteTag", doc);
-  env.alertAnswers.push(3);                 // No: only this side
-  doc.click(300, 300, 2);
-  doc.bar("done");
-  assert.deepStrictEqual(names(doc), ["ART:T:A-1:1"]);
-  env.ART.run("placeTag", doc);             // reference mode asks for A-1's match first
-  assert.ok(/A-1 .*click where it should go/.test(doc.status()), doc.status());
-  doc.click(320, 350, 3);
+  doc.click(50, 50, 2);
   assert.deepStrictEqual(names(doc), ["ART:T:A-1:1", "ART:T:A-1:2"]);
-  assert.strictEqual(doc._annots.find(a => a.name === "ART:T:A-1:2").page, 3);
-  assert.ok(/A-2 .*click the figure/.test(doc.status()), "then carries on with the sequence: " + doc.status());
-  const l1 = doc._links.find(l => l.page === 0);
-  assert.strictEqual(followLink(env, doc, l1), 3, "link follows the re-placed tag");
+  assert.strictEqual(doc._links.length, 2, "A-1's links untouched");
+  doc.bar("done");
+  assert.strictEqual(JSON.parse(doc.info.ARTRegister).pending, null, "nothing left waiting for a match");
 });
 
-test("reference mode: bar Delete removes a tag mid-session and carries on", () => {
+test("reference mode: Delete stays on for tag after tag, and shows it's on", () => {
   const env = makeEnv(); const doc = new env.Doc(4);
   env.ART.run("placeTag", doc);
   doc.click(100, 100, 0); doc.click(100, 100, 1);    // A-1 pair
   doc.click(200, 200, 0); doc.click(200, 200, 2);    // A-2 pair
+  doc.click(300, 300, 0); doc.click(300, 300, 3);    // A-3 pair
+  const alerts = env.alerts.length;
+  doc.goTo(0);
+  const off = JSON.stringify(doc.getField("ART_BAR.del.p0").fillColor);
   doc.bar("del");
-  assert.ok(/Click the tag to delete/.test(doc.status()));
-  env.alertAnswers.push(3);                           // just this side (A-1 match on p.2)
-  doc.click(100, 100, 1);
-  assert.ok(/A-1 .*click where it should go/.test(doc.status()), doc.status());
-  doc.click(150, 150, 3);                             // re-place A-1 match
-  assert.ok(/A-3 .*figure/.test(doc.status()), doc.status());
-  doc.bar("undo");                                    // undo the re-place
-  assert.ok(/A-1 .*click where it should go/.test(doc.status()), "undo steps back to re-placing: " + doc.status());
-  doc.click(160, 160, 3);
-  doc.bar("del"); doc.bar("del");                     // toggle off again
-  assert.ok(/A-3 .*figure/.test(doc.status()));
+  assert.ok(/Click a tag to delete it/.test(doc.status()), doc.status());
+  const on = JSON.stringify(doc.getField("ART_BAR.del.p0").fillColor);
+  assert.notStrictEqual(on, off, "Delete button changes colour while it's on");
+  doc.click(100, 100, 1);                             // A-1's match: both A-1 tags go
+  assert.ok(/A-1 deleted/.test(doc.status()), doc.status());
+  doc.click(200, 200, 0);                             // A-2's figure: both A-2 tags go
+  assert.deepStrictEqual(names(doc), ["ART:T:A-3:1", "ART:T:A-3:2"]);
+  assert.strictEqual(env.alerts.length, alerts, "no questions");
+  doc.goTo(3);
+  assert.strictEqual(JSON.stringify(doc.getField("ART_BAR.del.p3").fillColor), on, "shows on other pages too");
+  doc.bar("undo");                                    // A-2 back
+  assert.deepStrictEqual(names(doc), ["ART:T:A-2:1", "ART:T:A-2:2", "ART:T:A-3:1", "ART:T:A-3:2"]);
+  doc.bar("del");                                     // off: back to placing
+  assert.strictEqual(JSON.stringify(doc.getField("ART_BAR.del.p3").fillColor), off);
+  assert.ok(/^A-4 .*figure/.test(doc.status()), doc.status());
+  doc.click(400, 400, 3);
+  assert.ok(tagNamed(doc, "ART:T:A-4:1"), "clicks place tags again");
+  doc.goTo(0);
+  assert.strictEqual(JSON.stringify(doc.getField("ART_BAR.del.p0").fillColor), off, "page 1 caught up");
+  doc.bar("undo");                                    // Undo goes back through placing and deleting in order: A-4 ...
+  assert.ok(!tagNamed(doc, "ART:T:A-4:1"));
+  doc.bar("undo");                                    // ... then the A-1 delete
   env.ART.run("placeTag", doc);
-  assert.deepStrictEqual(names(doc), ["ART:T:A-1:1", "ART:T:A-1:2", "ART:T:A-2:1", "ART:T:A-2:2"]);
+  assert.deepStrictEqual(names(doc), ["ART:T:A-1:1", "ART:T:A-1:2", "ART:T:A-2:1", "ART:T:A-2:2", "ART:T:A-3:1", "ART:T:A-3:2"]);
+});
+
+test("reference mode: deleting the half-placed pair, then Undo, carries on waiting for its match", () => {
+  const env = makeEnv(); const doc = new env.Doc(4);
+  env.ART.run("placeTag", doc);
+  doc.click(100, 100, 0); doc.click(100, 100, 1);    // A-1 pair
+  doc.click(200, 200, 0);                             // A-2 figure, waiting for its match
+  doc.bar("del");
+  doc.click(200, 200, 0);                             // delete A-2
+  doc.bar("del");
+  assert.ok(/^A-2 .*click the figure/.test(doc.status()), "A-2 starts again: " + doc.status());
+  doc.bar("undo");                                    // put it back
+  assert.ok(/^A-2 .*now click its match/.test(doc.status()), doc.status());
+  doc.click(250, 250, 3);
+  assert.ok(/^A-3 /.test(doc.status()), doc.status());
+  doc.pageNum = 2;
+  assert.strictEqual(followLink(env, doc, doc._links.find(l => l.page === 0 && l.rect[0] < 200 && l.rect[2] > 200)), 3);
+  env.ART.run("placeTag", doc);
+  assert.strictEqual(JSON.parse(doc.info.ARTRegister).pending, null);
+});
+
+test("Undo after choosing a new number in Options: the half-placed pair still gets its match", () => {
+  const env = makeEnv(); const doc = new env.Doc(4);
+  env.ART.run("placeTag", doc);
+  doc.click(100, 100, 0); doc.click(100, 100, 1);    // A-1 pair
+  doc.click(200, 200, 0);                             // A-2 figure, waiting
+  doc.bar("del"); doc.click(200, 200, 0); doc.bar("del");
+  env.dialogResults.push({ next: "B-1" });
+  doc.bar("opts");
+  assert.ok(/^B-1/.test(doc.status()), doc.status());
+  doc.bar("undo");                                    // A-2 figure back: its match comes first
+  assert.ok(/^A-2 .*now click its match/.test(doc.status()), doc.status());
+  doc.click(250, 250, 3);
+  assert.ok(tagNamed(doc, "ART:T:A-2:2"));
+  env.ART.run("placeTag", doc);
+  assert.strictEqual(JSON.parse(doc.info.ARTRegister).pending, null);
+});
+
+test("Undo never leaves the next click on a number that's back in use", () => {
+  const env = makeEnv(); const doc = new env.Doc(4);
+  env.ART.run("placeTag", doc);
+  doc.click(100, 100, 0); doc.click(100, 100, 1);    // A-1
+  doc.click(200, 200, 0); doc.click(200, 200, 1);    // A-2
+  doc.bar("del"); doc.click(100, 100, 0); doc.bar("del");
+  env.dialogResults.push({ next: "A-1" });            // allowed: A-1 is gone
+  doc.bar("opts");
+  doc.bar("undo");                                    // A-1 is back
+  assert.ok(!/^A-1 /.test(doc.status()) && !/^A-2 /.test(doc.status()), doc.status());
+  doc.click(300, 300, 2); doc.click(300, 300, 3);
+  env.ART.run("placeTag", doc);
+  const n = names(doc);
+  assert.strictEqual(new Set(n).size, n.length, "no two tags with the same name: " + n);
+  assert.strictEqual(n.length, 6);
+});
+
+test("while deleting, the bar on the page you clicked shows what happened (several pages on screen)", () => {
+  const env = makeEnv(); const doc = new env.Doc(6);
+  refPairs(env, doc, [[0, 100, 100], [4, 400, 400]]);
+  env.ART.run("deleteTag", doc);
+  doc.goTo(4); doc.goTo(0);                           // pages 1 and 5 set up; Acrobat calls page 1 current
+  const f = doc._fields["ART_CAP.p4"];
+  new (vm.runInContext("Function", env.ctx))("event", f.script.replace(/this\.mouseX/g, 400).replace(/this\.mouseY/g, 400)).call(doc, { target: f });
+  env.runTimers();
+  assert.strictEqual(doc._annots.length, 0);
+  assert.ok(/A-1 deleted/.test(doc._fields["ART_BAR.status.p4"].caption), doc._fields["ART_BAR.status.p4"].caption);
+  assert.ok(/A-1 deleted/.test(doc._fields["ART_BAR.status.p0"].caption));
+});
+
+test("Undo while deleting says what it did each time", () => {
+  const env = makeEnv(); const doc = new env.Doc(3);
+  env.ART.run("placeTag", doc);
+  doc.click(100, 100, 0); doc.click(100, 100, 1);    // A-1
+  doc.bar("del"); doc.click(100, 100, 1);
+  doc.bar("undo");
+  assert.ok(/A-1 put back/.test(doc.status()), doc.status());
+  doc.bar("undo");
+  assert.ok(/A-1 tag taken off/.test(doc.status()), doc.status());
+  assert.deepStrictEqual(names(doc), ["ART:T:A-1:1"]);
+});
+
+test("Undo puts back the tag you clicked even when a copied page has one with the same name", () => {
+  const env = makeEnv(); const doc = new env.Doc(5);
+  refPairs(env, doc, [[0, 100, 100], [1, 100, 100]]);
+  const copy = doc.addAnnot(Object.assign(tagNamed(doc, "ART:T:A-1:1").getProps(), { page: 4 }));  // page inserted from a copy
+  env.ART.run("deleteTag", doc);
+  doc.click(100, 100, 0);
+  doc.bar("undo");
+  assert.strictEqual(doc._annots.filter(a => a.name === "ART:T:A-1:1" && a.page === 0).length, 1, "page 1's tag is back");
+  assert.ok(doc._annots.includes(copy), "the copy is untouched");
+});
+
+test("Delete Tag from the menu while placing switches the bar's Delete on", () => {
+  const env = makeEnv(); const doc = new env.Doc(3);
+  env.ART.run("placeTag", doc);
+  doc.click(100, 100, 0); doc.click(100, 100, 1);
+  env.ART.run("deleteTag", doc);
+  env.ART.run("deleteTag", doc);                      // a second time doesn't switch it off
+  assert.ok(/Click a tag to delete it/.test(doc.status()), doc.status());
+  doc.click(100, 100, 1);
+  assert.strictEqual(doc._annots.length, 0);
+  assert.strictEqual(env.ART.isActive(), true, "still in reference mode");
+});
+
+test("a tag left waiting to be put back by 0.4.1's 'just this one' is still asked for first", () => {
+  const env = makeEnv(); const doc = new env.Doc(4);
+  refPairs(env, doc, [[0, 100, 100], [2, 300, 300]]);
+  const t = tagNamed(doc, "ART:T:A-1:2"); t.readOnly = false; t.destroy();
+  doc._links = doc._links.filter(l => l.page !== 2);
+  const reg = JSON.parse(doc.info.ARTRegister);
+  delete reg.items["ART:T:A-1:2"]; reg.redo = { label: "A-1", side: 2 };
+  doc.info.ARTRegister = JSON.stringify(reg);
+  env.ART.run("placeTag", doc);
+  assert.ok(/A-1 .*click where it should go/.test(doc.status()), doc.status());
+  doc.click(320, 350, 3);
+  assert.strictEqual(tagNamed(doc, "ART:T:A-1:2").page, 3);
+  assert.ok(/A-2 .*click the figure/.test(doc.status()), doc.status());
+  assert.strictEqual(followLink(env, doc, linkOn(doc, 0)), 3, "link follows the re-placed tag");
 });
 
 test("protected (certified/secured) PDF gets a plain-English explanation", () => {

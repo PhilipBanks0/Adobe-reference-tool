@@ -9,7 +9,7 @@ An Acrobat add-on for preparing accounting work papers.
 | **Tag Check** | Lists every tag with its page numbers and flags tags that are unmatched or broken. |
 | **Replace Page (Keep Tags)** | Swaps a page for a new version (for example a reissued bank statement) and puts back the tags and tapes that were on it. |
 | **Repair Tags** | Restores tags or tapes that were lost outside the tool, for example after using Acrobat's own *Replace Pages*, and refreshes all links. |
-| **Move Tag / Delete Tag** | Moves one tag to a new spot, or removes both sides of a tag. |
+| **Move Tag / Delete Tag** | Moves one tag to a new spot, or deletes references with one click each (Undo puts them back). |
 
 **Reviewers don't need the add-on.** The tags and tapes are ordinary PDF comments and links, so anyone using Acrobat or Acrobat Reader can see them and click through.
 
@@ -116,16 +116,14 @@ Everyone's updater picks up the new release from there. To build the files local
 While reference mode is on, a small bar sits at the top of the page. It appears on each page a moment after you get there (the add-on sets pages up as you reach them, so it's just as quick on a very large work paper); if a click doesn't place a tag, wait for the bar:
 
 - **Status:** shows what your next click places, e.g. `A-3 - now click its match`.
-- **Undo:** removes the last tag you placed.
-- **Delete:** click it, then click any tag to delete it.
-  - **Yes** deletes both sides.
-  - **No** deletes just the one you clicked; your next click puts it back in the right place.
+- **Undo:** takes back the last thing you did: removes the last tag you placed, or puts back the last reference you deleted.
+- **Delete:** click it (it turns pink), then click the tags you want gone. Each click deletes that reference straight away, both of its tags and their links, with no question to answer. Click one tag after another; **Undo** puts the last one back. Click **Delete** again to go back to placing.
 - **Options:** change the next number, colour or size.
 - **Done:** finishes reference mode.
 
 The bar doesn't print and goes away when you finish.
 
-**Fixing mistakes later:** go to **Reference Tool menu → Delete Tag**, then click the tag on any page. **Yes** removes both sides. **No** removes only that one: start the Reference tool again and your first click puts it back.
+**Fixing mistakes later:** go to **Reference Tool menu → Delete Tag**, then click tags on any page; each click deletes that reference (both tags). **Undo** on the bar puts the last one back, and **Done** finishes. To put one tag of a reference somewhere else instead, use **Move Tag**.
 
 To jump between the two sides of a reference, click either tag with the normal Hand/Select tool.
 
