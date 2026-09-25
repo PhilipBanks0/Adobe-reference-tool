@@ -113,35 +113,23 @@ To jump between the two sides of a reference, click either tag with the normal H
 ### Calc Tape
 
 1. Go to the page where the tape should go and click **Calc Tape**.
-2. Enter one line per entry: `[+ - * /] amount description`. For example:
+2. Type an amount in the entry box and press **Enter**. It goes straight onto the tape and the **Total** updates. Keep going:
 
    ```
-   12,400      Balance per bank
-   + 3,250     Deposit in transit
-   - 800       Outstanding cheque #1042
-   =
-   (50)        Bank fee not recorded
+   12,400 Balance per bank      Enter
+   +3,250 Deposit in transit    Enter
+   -800 Outstanding cheque      Enter
+   =                            Enter   (subtotal)
+   (50) Bank fee                Enter
    ```
 
-   - Negatives can be written as `(800)` or `-800`.
-   - A line with only `=` inserts a subtotal.
-   - `x 5%` multiplies the running total by 5%.
-3. Click **Preview tape** to check it, then **Place on page**, then click where the top-left corner of the tape should go.
+   - Negatives: `(800)` or `-800`.
+   - `x 1.05` multiplies the running total, `/ 2` divides it, and `x 5%` works too.
+   - You can also edit the lines in the tape box directly. The preview refreshes when you click out of it, or with **Refresh preview**.
+3. When you're done, press **Enter** on the empty entry box, or click **Place on page**.
+4. Click where the top-left corner of the tape should go.
 
 The tape records your initials and the date. You can drag it to a new position afterwards.
-
-```
-TAPE: Bank rec
-  12,400.00  +  Balance per bank
-   3,250.00  +  Deposit in transit
-     800.00  -  Outstanding cheque #1042
-  ----------
-  14,850.00  S  Subtotal
-     (50.00) +  Bank fee not recorded
-=============
-  14,800.00  T  Total
-Prepared by GR 2026-09-24
-```
 
 ### Tag Check
 

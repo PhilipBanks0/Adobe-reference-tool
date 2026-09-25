@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2 - 2026-09-25
+
+- Calc Tape works like an adding machine: type an amount (and a description) in the entry box and press **Enter**. The line goes straight onto the tape and the total updates, with the cursor ready for the next number. Acrobat only refreshes a box when you leave it, so the tape now updates on Enter instead of on every keystroke.
+- Press Enter on an empty entry box, or click **Place on page**, when you're done. A line that can't be read stays in the box with an explanation so you can fix it.
+- You can still edit the tape lines directly; the preview updates when you click out of that box, or with **Refresh preview**.
+
 ## 0.3.1 - 2026-09-25
 
 - Calc Tape: the preview and a running **Total** box now update as you type, so you can see the calculation build up. (A **Refresh preview** button is still there as a backup.)

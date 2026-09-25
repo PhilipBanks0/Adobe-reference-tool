@@ -69,7 +69,7 @@ var ART_privLaunchURL = app.trustedFunction(function (url) {
 var ART_timer = null;
 
 var ARTool = (function () {
-    var VERSION = "0.3.1";
+    var VERSION = "0.3.2";
     var REPO = "PhilipBanks0/Adobe-reference-tool";
     var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
     var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -970,20 +970,45 @@ var ARTool = (function () {
 
     function tapeDialog(prefill) {
         var result = null;
-        function refresh(d) {
-            var p = tapePreview(d.store());
+        function refresh(d, r) {
+            var p = tapePreview(r || d.store());
             d.load({ prev: p.text, totl: p.total });
+        }
+        /**
+         * Enter in the one-line box presses the dialog's default button, so
+         * "validate" is where a typed line gets added to the tape. Returning
+         * false keeps the dialog open for the next number.
+         */
+        function addLine(d) {
+            var r = d.store();
+            var line = trim(r.entr || "");
+            if (!line) { return true; }                    // nothing typed: finish
+            var before = computeTape(r.ents).errors.length;
+            var ents = r.ents ? String(r.ents).replace(/[\r\n]+$/, "") + "\n" + line : line;
+            if (computeTape(ents).errors.length > before) {
+                d.load({ prev: "Can't read \"" + line + "\" - type an amount, e.g. 1,250.00 or -800 Rent\n\n" + tapePreview(r).text });
+                try { d.focus("entr"); } catch (e) {}
+                return false;
+            }
+            r.ents = ents;
+            d.load({ ents: ents, entr: "" });
+            refresh(d, r);
+            try { d.focus("entr"); } catch (e2) {}
+            return false;
         }
         var dlg = {
             initialize: function (d) {
-                d.load({ titl: prefill.titl, ents: prefill.ents, init: prefill.init, prev: "", totl: "" });
+                d.load({ titl: prefill.titl, ents: prefill.ents, entr: "", init: prefill.init, prev: "", totl: "" });
                 refresh(d);
+                try { d.focus("entr"); } catch (e) {}
             },
-            // Acrobat calls these as you type, so the preview stays current.
+            // Acrobat runs these when you leave a box (e.g. after editing the tape lines).
             ents: function (d) { refresh(d); },
             titl: function (d) { refresh(d); },
             init: function (d) { refresh(d); },
             prvw: function (d) { refresh(d); },
+            addl: function (d) { addLine(d); },
+            validate: function (d) { return addLine(d); },
             commit: function (d) { result = d.store(); },
             description: {
                 name: "Calculator Tape",
@@ -997,9 +1022,17 @@ var ARTool = (function () {
                             elements: [
                                 { type: "static_text", name: "Title:" },
                                 { type: "edit_text", item_id: "titl", width: 300 },
-                                { type: "static_text", name: "Entries (one per line):  [+ - * /] amount  description" },
-                                { type: "static_text", name: "(800) or -800 = negative.   =  on its own line = subtotal." },
-                                { type: "edit_text", item_id: "ents", multiline: true, width: 300, height: 220 },
+                                { type: "static_text", name: "Type an amount and press Enter  (e.g.  -800 O/S cheque,  x 1.05,  = subtotal):" },
+                                {
+                                    type: "view",
+                                    align_children: "align_row",
+                                    elements: [
+                                        { type: "edit_text", item_id: "entr", width: 230 },
+                                        { type: "button", item_id: "addl", name: "Add" }
+                                    ]
+                                },
+                                { type: "static_text", name: "Tape lines (you can edit these too):" },
+                                { type: "edit_text", item_id: "ents", multiline: true, width: 300, height: 190 },
                                 {
                                     type: "view",
                                     align_children: "align_row",
@@ -1017,7 +1050,7 @@ var ARTool = (function () {
                             type: "view",
                             align_children: "align_left",
                             elements: [
-                                { type: "static_text", name: "Preview (updates as you type):" },
+                                { type: "static_text", name: "Tape:" },
                                 { type: "edit_text", item_id: "prev", multiline: true, readonly: true, width: 320, height: 330 }
                             ]
                         }

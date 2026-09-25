@@ -398,6 +398,37 @@ test("calc tape preview and total update as you type", () => {
   assert.ok(dlg && typeof dlg.ents === "function", "live handler on the entries box");
 });
 
+test("calc tape: type an amount, press Enter, it appears on the tape straight away", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  let placed = null;
+  env.ctx.app.execDialog = d => {
+    const fields = {}; const shown = {};
+    const h = { load(o) { Object.assign(shown, o); Object.assign(fields, o); }, store() { return Object.assign({}, fields); }, enable() {}, focus(id) { h.focused = id; } };
+    d.initialize(h);
+    assert.strictEqual(h.focused, "entr", "cursor starts in the amount box");
+    fields.entr = "12,400 Cash per bank";
+    assert.strictEqual(d.validate(h), false, "Enter adds the line and keeps the dialog open");
+    assert.strictEqual(shown.totl, "12,400.00");
+    assert.strictEqual(fields.entr, "", "amount box cleared for the next number");
+    fields.entr = "-800 O/S cheque"; d.validate(h);
+    fields.entr = "+3,250 DIT"; d.addl(h);          // the Add button does the same
+    assert.strictEqual(shown.totl, "14,850.00");
+    assert.ok(/14,850\.00  T  Total/.test(shown.prev), shown.prev);
+    fields.entr = "hello"; assert.strictEqual(d.validate(h), false);
+    assert.ok(/Can't read "hello"/.test(shown.prev), "bad line explained, not added");
+    assert.strictEqual(fields.entr, "hello", "bad line left in the box to fix");
+    fields.entr = "";
+    assert.strictEqual(d.validate(h), true, "Enter on an empty box = Place on page");
+    d.commit(h); placed = fields.ents;
+    return "ok";
+  };
+  env.ART.run("calcTape", doc);
+  assert.strictEqual(env.alerts.filter(a => /error/i.test(a)).join(" | "), "");
+  assert.strictEqual(placed, "12,400 Cash per bank\n-800 O/S cheque\n+3,250 DIT");
+  doc.click(50, 700);
+  assert.ok(/14,850\.00  T  Total/.test(doc._annots[0].contents));
+});
+
 test("calc tape with bad entry reopens dialog, then works", () => {
   const env = makeEnv(); const doc = new env.Doc(1);
   env.dialogResults.push({ titl: "", ents: "abc", init: "" }, { titl: "", ents: "5\n5", init: "" });
