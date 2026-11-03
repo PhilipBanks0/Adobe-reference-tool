@@ -6,6 +6,7 @@ An Acrobat add-on for preparing accounting work papers.
 |---|---|
 | **Reference** | Click a figure in the financial statements, then its match in the support. Numbers run on automatically (A-1, A-2, …), and clicking either tag jumps to the other. |
 | **Calc Tape** | A 10-key style calculator that leaves its tape on the page as a comment, so the reviewer can see how a figure was worked out. Double-click a tape to change it. |
+| **Bookmarks** | Bookmarks pages from a standard list (like TicTie Calculate's bookmark templates): step through the pages and click a name for each. **Repaginate** then puts the pages in bookmark order. |
 | **Tag Check** | Lists every tag with its page numbers and flags tags that are unmatched or broken. |
 | **Replace Page (Keep Tags)** | Swaps a page for a new version (for example a reissued bank statement) and puts back the tags and tapes that were on it. |
 | **Repair Tags** | Restores tags or tapes that were lost outside the tool, for example after using Acrobat's own *Replace Pages*, and refreshes all links. |
@@ -103,7 +104,8 @@ Everyone's updater picks up the new release from there. To build the files local
 1. **Tapes first, on the individual PDFs.** Open each support PDF and add calculator tapes where they're needed.
 2. **Combine.** Use Acrobat's *Combine Files* to build the work paper. The tapes come across automatically.
 3. **Reference.** In the combined PDF, tag each figure on the statements to its support.
-4. **Before review:** run **Tag Check** and fix anything it flags.
+4. **Bookmark.** Click **Bookmarks** and work through the pages, picking a name for each section. Then **Repaginate** if the pages should follow the bookmark order.
+5. **Before review:** run **Tag Check** and fix anything it flags.
 
 ### Reference (placing tags)
 
@@ -178,6 +180,26 @@ A-1      p.1  <->  p.14
 ...
 ```
 
+### Bookmarks
+
+1. Go to the first page to bookmark and click **Bookmarks** (toolbar, or *Reference Tool menu → Bookmarks*).
+2. Choose a list under **Standard bookmarks** (it remembers your last choice).
+3. Click a name on the left, then **Bookmark this page**. The window goes on to the next page. The start of the page's text shows on the right so you know which page you're on; use **Next page** / **Previous page** to skip pages that don't need a bookmark.
+4. Click **Done**. The bookmarks are in Acrobat's Bookmarks panel.
+
+- Bookmarks always appear in the list's order, whatever order you bookmark the pages in. A name indented under another becomes its sub-bookmark, and the heading above it is added for you (it goes to its first sub-bookmark's page).
+- Change the name in the box before you click **Bookmark this page** to use your own wording, for example `Bank Statements - Dec`.
+- The same name can go on several pages. Names already used show a ✓ and their pages.
+- **Remove** takes off the selected name's bookmark (the one on this page, if there are several). **Go to it** jumps to its page.
+- **Repaginate...** moves the pages so they follow the bookmarks. Each bookmark takes the pages after it, up to the next bookmark made with this window; pages before the first bookmark stay at the front. Tags, tapes and comments move with their pages. Acrobat can't undo this, so save first if you might want the old order back.
+- **Remove all bookmarks...** clears the bookmarks. If the PDF also has bookmarks made some other way, you choose whether those go too (if you keep them, a bookmark of ours with one of yours nested under it stays as well).
+
+**Editing the standard lists:** click **Edit templates...** in the window, or *Reference Tool menu → Edit Standard Bookmarks*. One name per line, in order; start a line with two spaces (or `>`) to make it a sub-bookmark of the line above. **New template** adds another list, for example one for reviews and one for compilations. The add-on comes with *Year-end file* and *Monthly bookkeeping*; **Add the built-in templates back** restores them if you delete them.
+
+To give the team the same list, copy its text from that window and have each person paste it into a new template. Acrobat only keeps about 4,000 characters of add-on settings, so keep the lists short; you'll be warned if they get too long. Each work paper also keeps a copy of the list it was bookmarked with, so it shows the same list on another PC, unless that PC has its own list with the same name.
+
+Bookmarks find their page through a small hidden marker on the page, so they stay right when pages are inserted, moved or repaginated, and they work in Acrobat Reader too. **Replace Page** keeps the marker; after Acrobat's own *Replace Pages*, **Repair Tags** puts it back.
+
 ### Replace Page (Keep Tags)
 
 Use this when a page needs a newer version, for example a reissued statement or an updated schedule.
@@ -202,7 +224,7 @@ Repair Tags also rebuilds every link, which is useful after moving tags or reord
 
 ## Good to know
 
-- **Page reordering is safe.** Links find their partner by name when they're clicked, not by page number.
+- **Page reordering is safe.** Links and bookmarks find their target by name when they're clicked, not by page number.
 - **Tags are locked** so a click goes to the link rather than selecting the comment. Use **Move Tag** and **Delete Tag** to change them.
 - **Protected PDFs** can't be tagged. Acrobat won't let anything be added to a PDF that's certified, digitally signed (blue bar at the top) or secured. Combine it into your work paper with *Combine Files*, or print it to PDF, and tag that copy.
 - **Don't flatten** the work paper until review is complete. Flattening turns tags and tapes into static marks with no links.
@@ -247,6 +269,11 @@ The mock can't show how Acrobat itself behaves, so a manual check in Acrobat Pro
 - [ ] Use Acrobat's own *Organize Pages → Replace*, then **Repair Tags**. The tags are restored.
 - [ ] Test a landscape (rotated) page. The link sits on top of the tag.
 - [ ] Open the file in Acrobat Reader. The tags are visible and clickable.
+- [ ] Bookmarks: the window opens, Next page / Previous page show each page's text, and Bookmark this page adds the bookmark in list order.
+- [ ] Bookmarks: the list's indented names and the ✓ page numbers line up readably.
+- [ ] Bookmarks: after Repaginate, every bookmark and tag still goes to the right page. Insert a page at the front: they still do.
+- [ ] Bookmarks: the hidden markers don't show on the page or in print. (Check whether they appear in the Comments list.)
+- [ ] Edit Standard Bookmarks: a new template is still there after restarting Acrobat.
 - [ ] *Check for Updates* reaches GitHub (allow the connection if Acrobat asks).
 - [ ] The Start menu *Update Reference Tool* shortcut reports "up to date" on the latest release.
 

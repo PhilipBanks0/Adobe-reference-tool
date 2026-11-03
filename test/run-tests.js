@@ -30,6 +30,14 @@ function makeEnv(menuParents) {
     constructor(page, rect) { this.page = page; this.rect = rect; this.action = null; }
     setAction(s) { this.action = s; }
   }
+  // Acrobat's bookmark tree: createChild(name, script, index), children (null when none), remove().
+  class Bookmark {
+    constructor(doc, name, action, parent) { this.doc = doc; this.name = name; this.action = action; this.parent = parent; this._kids = []; this.open = false; }
+    get children() { return this._kids.length ? this._kids.slice() : null; }
+    createChild(name, expr, index) { this._kids.splice(index === undefined ? 0 : index, 0, new Bookmark(this.doc, name, expr, this)); this.doc.dirty = true; }
+    remove() { if (this.parent) this.parent._kids = this.parent._kids.filter(k => k !== this); this.doc.dirty = true; }
+    setAction(s) { this.action = s; }
+  }
   class Doc {
     constructor(pages) {
       const doc = this;
@@ -37,6 +45,7 @@ function makeEnv(menuParents) {
       this.numPages = pages; this.pageNum = 0; this._annots = []; this._links = []; this._fields = {}; this.dirty = false;
       this.info = new Proxy({}, { set(o, k, v) { o[k] = v; doc.dirty = true; return true; } });
       this._rot = {}; this.selectedAnnots = []; this.path = "/work-paper-" + (++docCount) + ".pdf";
+      this.bookmarkRoot = new Bookmark(this, "Root", null, null); this._words = {};
     }
     syncAnnotScan() {}
     getAnnots(o) { const r = this._annots.filter(a => !o || a.page === o.nPage); return r.length ? r : null; }
@@ -84,6 +93,24 @@ function makeEnv(menuParents) {
       this._replaced = o;
     }
     scroll() {}
+    // Like Acrobat: comments, links and fields travel with a moved page.
+    movePage(n, after) {
+      if (!(n >= 0 && n < this.numPages && after >= -1 && after < this.numPages)) throw new RangeError("bad page");
+      const order = [...Array(this.numPages).keys()];
+      order.splice(n, 1);
+      order.splice(after === -1 ? 0 : order.indexOf(after) + 1, 0, n);
+      const to = {}; order.forEach((old, i) => { to[old] = i; });
+      this._annots.forEach(a => { a.page = to[a.page]; });
+      this._links.forEach(l => { l.page = to[l.page]; });
+      for (const f of Object.values(this._fields)) { f.widgets.forEach(w => { w.page = to[w.page]; }); f.page = f.widgets.length === 1 ? f.widgets[0].page : f.widgets.map(w => w.page); }
+      const rot = {}, words = {};
+      for (const k of Object.keys(this._rot)) rot[to[k]] = this._rot[k];
+      for (const k of Object.keys(this._words)) words[to[k]] = this._words[k];
+      this._rot = rot; this._words = words; this.dirty = true;
+    }
+    getPageNumWords(p) { return String(this._words[p] || "").split(/\s+/).filter(Boolean).length; }
+    getPageNthWord(p, i) { return String(this._words[p] || "").split(/\s+/).filter(Boolean)[i] + " "; }
+    getPageLabel(p) { return String(p + 1); }
     // helper: the user goes to a page and waits a moment (the add-on's timer ticks)
     goTo(page) { this.pageNum = page; runIntervals(3); }
     // helper: simulate a user click on the page (the capture field over it)
@@ -174,7 +201,7 @@ function makeEnv(menuParents) {
   // A scripted user in a dialog: type into boxes, press Enter, click buttons, OK or Cancel.
   function runDialogScript(d, script) {
     const fields = {};
-    const h = { load(o) { Object.assign(fields, o); }, store() { return Object.assign({}, fields); }, enable() {}, focus(id) { h.focused = id; } };
+    const h = { load(o) { Object.assign(fields, o); }, store() { return Object.assign({}, fields); }, enable() {}, focus(id) { h.focused = id; }, end(c) { h.ended = c; } };
     if (d.initialize) d.initialize(h);
     const ui = {
       d, h, fields,
@@ -182,7 +209,9 @@ function makeEnv(menuParents) {
       type(id, v) { fields[id] = v; },                  // replace a box's text
       leave(id) { if (d[id]) d[id](h); },                // click out of a box after changing it
       enter(text) { if (text !== undefined) fields.entr = text; return d.validate(h) === false ? null : "ok"; },
-      click(id) { d[id](h); },
+      click(id) { d[id](h); return h.ended; },
+      // pick a list or popup item (by its index from 0)
+      select(id, i) { const o = fields[id]; for (const k of Object.keys(o)) o[k] = Math.abs(o[k]) === i + 1 ? i + 1 : -Math.abs(o[k]); if (d[id]) d[id](h); },
       ok() { if (d.validate && d.validate(h) === false) return null; if (d.commit) d.commit(h); return "ok"; }
     };
     const r = script(ui);
@@ -248,7 +277,8 @@ console.log("Reference Tool tests");
 
 test("toolbar buttons install", () => {
   const env = makeEnv();
-  assert.deepStrictEqual(env.buttons, ["Reference", "Calc Tape", "Tag Check", "Replace Page", "Repair Tags"]);
+  assert.deepStrictEqual(env.buttons, ["Reference", "Calc Tape", "Bookmarks", "Tag Check", "Replace Page", "Repair Tags"]);
+  for (const m of ["Bookmarks", "Repaginate by Bookmarks", "Edit Standard Bookmarks"]) assert.ok(env.menuItems.includes(m), m);
 });
 
 test("menu goes under Edit (new Acrobat: Menu > Plugins > For editing), not the hamburger menu", () => {
@@ -1347,6 +1377,301 @@ test("automatic check respects the interval and the off switch", () => {
   env.ART.config.autoUpdateCheck = false;
   env.runTimers();
   assert.strictEqual(env.httpRequests.length, 0);
+});
+
+
+// ---------------------------------------------------------------- bookmarks
+// Called directly (not through run, which turns errors into alerts) so a failed assert fails the test.
+function bmWindow(env, doc, ...scripts) {
+  env.dialogScripts.push(...scripts);
+  const r = env.ART.bookmarks(doc);
+  assert.strictEqual(env.dialogScripts.length, 0, "every scripted window was opened");
+  return r;
+}
+const listKeys = ui => Object.keys(ui.get("blst"));
+const plainName = k => k.trim().replace(/\s+✓.*$/, "");
+function pick(ui, name) {
+  const keys = listKeys(ui);
+  const i = keys.findIndex(k => plainName(k) === name);
+  assert(i >= 0, "no list item " + name + " in " + keys.join(" | "));
+  ui.select("blst", Math.abs(ui.get("blst")[keys[i]]) - 1);
+}
+const bmTree = doc => { const out = []; (function w(b, d) { for (const k of (b.children || [])) { out.push("  ".repeat(d) + k.name); w(k, d + 1); } })(doc.bookmarkRoot, 0); return out; };
+function findBm(doc, names) {
+  let b = doc.bookmarkRoot;
+  for (const n of names) { b = (b.children || []).find(k => k.name === n); assert(b, "bookmark " + names.join(" > ")); }
+  return b;
+}
+// Click a bookmark like a reader would (only the PDF's own script runs).
+const clickBm = (env, doc, names) => { doc.pageNum = -1; new (vm.runInContext("Function", env.ctx))(findBm(doc, names).action).call(doc); return doc.pageNum; };
+const markers = doc => doc._annots.filter(a => a.name.startsWith("ART:B:"));
+
+test("bookmark templates: indented lines become sub-bookmarks", () => {
+  const { parseTemplate, builtinTemplates } = makeEnv().ART._internal;
+  const e = parseTemplate("Cash\n  Bank Rec\n\tStatements\n> Petty cash\n\n    Till counts\nAR\r\nAR\n  Aging\n        Too deep");
+  assert.deepStrictEqual(e.map(x => x.key), ["Cash", "Cash > Bank Rec", "Cash > Statements", "Cash > Petty cash",
+    "Cash > Petty cash > Till counts", "AR", "AR > Aging", "AR > Aging > Too deep"]);
+  assert.strictEqual(e[1].parent, 0);
+  assert.strictEqual(e[6].parent, 5, "a repeated line is the same bookmark");
+  assert.ok(parseTemplate(builtinTemplates[0].text).length > 15);
+});
+
+test("Bookmarks window: bookmark pages from the standard list, kept in template order", () => {
+  const env = makeEnv(); const doc = new env.Doc(8);
+  doc._words = { 0: "First National Bank statement December", 1: "Sample Co balance sheet", 4: "" };
+  const r = bmWindow(env, doc, ui => {
+    assert.ok(/Page 1 of 8/.test(ui.get("pgno")));
+    assert.ok(/First National Bank statement December/.test(ui.get("ptxt")));
+    assert.ok(Object.keys(ui.get("tmpl")).includes("Year-end file"));
+    ui.click("addb");
+    assert.ok(/click the name/i.test(ui.get("stat")), "asks for a name first");
+    pick(ui, "Bank Statements");
+    assert.strictEqual(ui.get("bnam"), "Bank Statements");
+    ui.click("addb");                                       // page 1, then on to page 2
+    assert.ok(/Page 2 of 8/.test(ui.get("pgno")));
+    pick(ui, "Financial Statements"); ui.click("addb");     // page 2
+    pick(ui, "Accounts Receivable"); ui.type("bnam", "AR - aging"); ui.click("addb"); // page 3, own name
+    assert.ok(listKeys(ui).some(k => /Bank Statements\s+✓ p\.1$/.test(k.trim())), listKeys(ui).join("|"));
+    ui.click("prvp"); ui.click("prvp");
+    assert.ok(/Bookmarked here: Financial Statements/.test(ui.get("ptxt")));
+    ui.click("nxtp"); ui.click("nxtp"); ui.click("nxtp");
+    assert.ok(/scanned/.test(ui.get("ptxt")), "says when a page has no text");
+    return ui.ok();
+  });
+  assert.strictEqual(r, "ok");
+  assert.deepStrictEqual(bmTree(doc), ["Financial Statements", "Cash", "  Bank Statements", "AR - aging"]);
+  assert.strictEqual(clickBm(env, doc, ["Cash", "Bank Statements"]), 0);
+  assert.strictEqual(clickBm(env, doc, ["Cash"]), 0, "a heading the tool added goes to its sub-bookmark");
+  assert.strictEqual(clickBm(env, doc, ["AR - aging"]), 2);
+  assert.strictEqual(clickBm(env, doc, ["Financial Statements"]), 1);
+  assert.strictEqual(markers(doc).length, 4);
+  assert.ok(markers(doc).every(a => a.hidden === true && a.print === false), "markers are hidden");
+  const reg = JSON.parse(doc.info.ARTRegister);
+  assert.strictEqual(reg.bm.template, "Year-end file");
+  assert.ok(/Bank Statements/.test(reg.bm.tpl.text), "the PDF keeps a copy of its template");
+});
+
+test("bookmarks keep pointing at their page when pages are inserted or moved", () => {
+  const env = makeEnv(); const doc = new env.Doc(8);
+  doc.pageNum = 5;
+  bmWindow(env, doc, ui => { pick(ui, "Inventory"); ui.click("addb"); return ui.ok(); });
+  assert.strictEqual(clickBm(env, doc, ["Inventory"]), 5);
+  doc.movePage(5, -1);                                     // e.g. pages put in front of it
+  assert.strictEqual(clickBm(env, doc, ["Inventory"]), 0);
+  doc.movePage(0, 6);
+  assert.strictEqual(clickBm(env, doc, ["Inventory"]), 6);
+});
+
+test("same name on several pages; the same page twice isn't doubled", () => {
+  const env = makeEnv(); const doc = new env.Doc(6);
+  bmWindow(env, doc, ui => {
+    ui.type("advn", false); ui.leave("advn");
+    pick(ui, "Bank Statements"); ui.click("addb");
+    ui.click("addb");
+    assert.ok(/already bookmarked on this page/.test(ui.get("stat")));
+    ui.click("nxtp"); ui.click("nxtp"); ui.click("addb");   // page 3 too
+    assert.ok(listKeys(ui).some(k => /Bank Statements\s+✓ p\.1, 3$/.test(k.trim())), listKeys(ui).join("|"));
+    ui.click("nxtp");
+    ui.click("remb");
+    assert.ok(/p\.1, 3\. Go to the page/.test(ui.get("stat")), ui.get("stat"));
+    ui.click("gotb");
+    assert.ok(/Page 1 of 6/.test(ui.get("pgno")), "Go to it goes to the next one, round to the first");
+    ui.click("remb");
+    assert.ok(/removed/.test(ui.get("stat")));
+    return ui.ok();
+  });
+  assert.deepStrictEqual(bmTree(doc), ["Cash", "  Bank Statements"]);
+  assert.strictEqual(clickBm(env, doc, ["Cash", "Bank Statements"]), 2);
+  assert.strictEqual(markers(doc).length, 2);
+});
+
+test("removing a bookmark with sub-bookmarks keeps it as their heading; empty headings go", () => {
+  const env = makeEnv(); const doc = new env.Doc(5);
+  bmWindow(env, doc, ui => {
+    pick(ui, "Cash"); ui.click("addb");                     // page 1
+    ui.click("nxtp"); pick(ui, "Bank Statements"); ui.click("addb");  // page 3
+    ui.click("prvp"); ui.click("prvp"); ui.click("prvp");   // back to page 1
+    pick(ui, "Cash"); ui.click("remb");
+    assert.ok(/only heads its sub-bookmarks/.test(ui.get("stat")), ui.get("stat"));
+    return ui.ok();
+  });
+  assert.deepStrictEqual(bmTree(doc), ["Cash", "  Bank Statements"]);
+  assert.strictEqual(clickBm(env, doc, ["Cash"]), 2, "the heading now goes to its sub-bookmark");
+  doc.pageNum = 2;
+  bmWindow(env, doc, ui => { pick(ui, "Bank Statements"); ui.click("remb"); return ui.ok(); });
+  assert.deepStrictEqual(bmTree(doc), []);
+  assert.strictEqual(markers(doc).length, 0);
+});
+
+test("Repaginate puts the pages in bookmark order; tags and bookmarks follow", () => {
+  const env = makeEnv(); const doc = new env.Doc(7);
+  for (let p = 0; p < 7; p++) doc._words[p] = "orig" + p;
+  // 0 cover, 1-2 bank statements, 3 statements, 4-5 AR, 6 trial balance
+  refPairs(env, doc, [[3, 100, 100], [1, 100, 100]]);
+  doc.pageNum = 1;
+  bmWindow(env, doc, ui => {
+    pick(ui, "Bank Statements"); ui.click("addb");          // p1
+    ui.click("nxtp");                                        // p3
+    pick(ui, "Financial Statements"); ui.click("addb");     // p3
+    pick(ui, "Accounts Receivable"); ui.click("addb");      // p4
+    ui.click("nxtp");                                        // p6
+    pick(ui, "Trial Balance"); ui.click("addb");
+    return ui.click("repg");
+  });
+  // alerts: Yes, reorder; then Done
+  const order = [...Array(7).keys()].map(p => doc._words[p]);
+  assert.deepStrictEqual(order, ["orig0", "orig3", "orig6", "orig1", "orig2", "orig4", "orig5"]);
+  assert.strictEqual(clickBm(env, doc, ["Financial Statements"]), 1);
+  assert.strictEqual(clickBm(env, doc, ["Trial Balance"]), 2);
+  assert.strictEqual(clickBm(env, doc, ["Cash"]), 3);
+  assert.strictEqual(clickBm(env, doc, ["Accounts Receivable"]), 5);
+  const reg = JSON.parse(doc.info.ARTRegister);
+  for (const id of Object.keys(reg.bm.items)) assert.ok(new RegExp("p=" + reg.bm.items[id].page + ",").test(bmScriptOf(doc, reg.bm.items[id].name)));
+  const l = doc._links.find(l => l.page === 1);
+  assert.ok(l, "the statements' tag moved with its page");
+  assert.strictEqual(followLink(env, doc, l), 3);
+  const again = env.ART.run("repaginate", doc);
+  assert.strictEqual(again.moved, 0);
+  assert.ok(env.alerts.some(a => /already follow the bookmark order/.test(a)));
+});
+function bmScriptOf(doc, name) { const out = []; (function w(b) { for (const k of (b.children || [])) { if (k.name === name) out.push(k.action); w(k); } })(doc.bookmarkRoot); return out[0]; }
+
+test("Repaginate: nothing to do without bookmarks, and No leaves the pages alone", () => {
+  const env = makeEnv(); const doc = new env.Doc(4);
+  for (let p = 0; p < 4; p++) doc._words[p] = "orig" + p;
+  assert.strictEqual(env.ART.run("repaginate", doc).moved, 0);
+  assert.ok(env.alerts.some(a => /no bookmarks from the Bookmarks window/.test(a)));
+  doc.pageNum = 3;
+  bmWindow(env, doc, ui => { pick(ui, "Financial Statements"); ui.click("addb"); return ui.ok(); });
+  doc.pageNum = 0;
+  bmWindow(env, doc, ui => { pick(ui, "Revenue"); ui.click("addb"); return ui.ok(); });
+  env.alertAnswers.push(3);                                 // No
+  assert.strictEqual(env.ART.run("repaginate", doc).moved, 0);
+  assert.strictEqual(doc._words[0], "orig0");
+  env.alertAnswers.push(4, 4);
+  assert.strictEqual(env.ART.run("repaginate", doc).moved, 1);
+  assert.deepStrictEqual([0, 1, 2, 3].map(p => doc._words[p]), ["orig3", "orig0", "orig1", "orig2"]);
+});
+
+test("Remove all bookmarks: all, or only the Bookmarks window's", () => {
+  const env = makeEnv(); const doc = new env.Doc(4);
+  doc.bookmarkRoot.createChild("My own", "this.pageNum=2", 0);
+  env.alertAnswers.push(3);                                 // No: only the Bookmarks window's
+  bmWindow(env, doc, ui => { pick(ui, "Bank Statements"); ui.click("addb"); pick(ui, "Revenue"); ui.click("addb"); return ui.click("clra"); },
+    ui => { assert.ok(/Removed 3/.test(ui.get("stat")), ui.get("stat")); return ui.ok(); });
+  // Bank Statements + its Cash heading + Revenue are ours; "My own" isn't. No = only ours.
+  assert.deepStrictEqual(bmTree(doc), ["My own"]);
+  assert.strictEqual(markers(doc).length, 0);
+  env.alertAnswers.length = 0;
+  const env2 = makeEnv(); const doc2 = new env2.Doc(3);
+  doc2.bookmarkRoot.createChild("Someone else's", "this.pageNum=1", 0);
+  bmWindow(env2, doc2, ui => { pick(ui, "Equity"); ui.click("addb"); return ui.click("clra"); }, ui => ui.ok());
+  assert.deepStrictEqual(bmTree(doc2), [], "Yes removes them all");
+  // "No" keeps one of ours that has someone's own bookmark under it.
+  const env3 = makeEnv(); const doc3 = new env3.Doc(3);
+  bmWindow(env3, doc3, ui => { pick(ui, "Bank Statements"); ui.click("addb"); pick(ui, "Equity"); ui.click("addb"); return ui.ok(); });
+  findBm(doc3, ["Cash"]).createChild("Their note", "this.pageNum=2", 0);
+  env3.alertAnswers.push(3);
+  bmWindow(env3, doc3, ui => ui.click("clra"), ui => { assert.ok(/Kept 1 that have your own/.test(ui.get("stat")), ui.get("stat")); return ui.ok(); });
+  assert.deepStrictEqual(bmTree(doc3), ["Cash", "  Their note"]);
+  assert.strictEqual(markers(doc3).length, 1, "the kept heading keeps its marker");
+});
+
+test("renaming a heading keeps its sub-bookmarks matched", () => {
+  const env = makeEnv(); const doc = new env.Doc(4);
+  bmWindow(env, doc, ui => {
+    pick(ui, "Cash"); ui.type("bnam", "Cash - operating"); ui.click("addb");   // page 1
+    pick(ui, "Bank Statements"); ui.click("addb");                           // page 2
+    ui.click("prvp"); ui.click("prvp");
+    pick(ui, "Cash"); ui.click("remb");                                       // back to a heading
+    pick(ui, "Cash"); ui.click("addb");                                       // bookmarked again, default name
+    return ui.ok();
+  });
+  assert.deepStrictEqual(bmTree(doc), ["Cash", "  Bank Statements"]);
+  bmWindow(env, doc, ui => {
+    assert.ok(listKeys(ui).some(k => /Bank Statements\s+\u2713 p\.2$/.test(k.trim())), listKeys(ui).join("|"));
+    return ui.ok();
+  });
+  assert.strictEqual(Object.keys(JSON.parse(doc.info.ARTRegister).bm.items).length, 2);
+});
+
+test("Edit templates: make a new list, use it, and the PDF carries it to other PCs", () => {
+  const env = makeEnv(); const doc = new env.Doc(3);
+  bmWindow(env, doc,
+    ui => ui.click("edtt"),
+    ui => {
+      ui.click("newt");
+      ui.type("tnam", "Year-end file"); ui.leave("tnam");
+      assert.strictEqual(ui.ok(), null, "two templates can't share a name");
+      assert.ok(/Two templates/.test(ui.get("stat")));
+      ui.type("tnam", "Audit binder"); ui.leave("tnam");
+      ui.type("tlns", "Lead sheets\r  Cash lead\r  AR lead\rSupport");
+      return ui.ok();
+    },
+    ui => {
+      const sel = Object.keys(ui.get("tmpl")).find(k => ui.get("tmpl")[k] > 0);
+      assert.strictEqual(sel, "Audit binder");
+      assert.deepStrictEqual(listKeys(ui).map(plainName), ["Lead sheets", "Cash lead", "AR lead", "Support"]);
+      pick(ui, "AR lead"); ui.click("addb");
+      return ui.ok();
+    });
+  assert.deepStrictEqual(bmTree(doc), ["Lead sheets", "  AR lead"]);
+  const saved = JSON.parse(env.ctx.global.ART_bmTemplates);
+  assert.deepStrictEqual(saved.map(t => t.name), ["Year-end file", "Monthly bookkeeping", "Audit binder"]);
+  assert.strictEqual(saved[2].text, "Lead sheets\n  Cash lead\n  AR lead\nSupport");
+  // Another PC without that template: the PDF brings it.
+  const env2 = makeEnv(); const doc2 = new env2.Doc(3);
+  doc2.info.ARTRegister = doc.info.ARTRegister;
+  bmWindow(env2, doc2, ui => {
+    assert.ok(Object.keys(ui.get("tmpl")).includes("Audit binder"));
+    assert.ok(listKeys(ui).map(plainName).includes("Cash lead"));
+    ui.select("tmpl", 0);
+    assert.ok(listKeys(ui).map(plainName).includes("Trial Balance"), "switching templates switches the list");
+    return ui.ok();
+  });
+  assert.strictEqual(env2.ctx.global.ART_bmTemplate, "Year-end file");
+});
+
+test("Edit templates warns when they're too big for Acrobat to keep", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  env.dialogScripts.push(ui => { ui.type("tlns", "A long bookmark name for a test\n".repeat(120)); return ui.ok(); });
+  env.ART.run("editBookmarkTemplates", doc);
+  assert.ok(env.alerts.some(a => /templates are large/.test(a)));
+});
+
+test("Replace Page and Repair Tags keep bookmarks on their page", () => {
+  const env = makeEnv(); const doc = new env.Doc(6);
+  doc.pageNum = 3;
+  bmWindow(env, doc, ui => { pick(ui, "Inventory"); ui.click("addb"); return ui.ok(); });
+  doc.pageNum = 3;
+  env.alertAnswers.push(4 /*replace?*/, 4 /*done*/);
+  env.responses.push("1");
+  const res = env.ART.run("replacePage", doc);
+  assert.strictEqual(res.markers, 1);
+  assert.ok(!env.alerts.some(a => /other comment/.test(a)), "the hidden marker isn't counted as a comment");
+  assert.strictEqual(markers(doc).length, 1);
+  assert.strictEqual(markers(doc)[0].page, 3);
+  assert.strictEqual(markers(doc)[0].hidden, true);
+  // Acrobat's own Replace Pages loses the marker; the bookmark still works, and Repair puts the marker back.
+  doc.replacePages({ nPage: 3 });
+  assert.strictEqual(markers(doc).length, 0);
+  assert.strictEqual(clickBm(env, doc, ["Inventory"]), 3);
+  const rep = env.ART.run("repairTags", doc);
+  assert.strictEqual(rep.bookmarks, 1);
+  assert.strictEqual(markers(doc).length, 1);
+  assert.ok(env.alerts.some(a => /Bookmarks re-linked to their pages: 1/.test(a)));
+  doc.movePage(3, -1);
+  assert.strictEqual(clickBm(env, doc, ["Inventory"]), 0);
+});
+
+test("bookmarks deleted in Acrobat's Bookmarks pane are forgotten", () => {
+  const env = makeEnv(); const doc = new env.Doc(3);
+  bmWindow(env, doc, ui => { pick(ui, "Equity"); ui.click("addb"); return ui.ok(); });
+  findBm(doc, ["Equity"]).remove();
+  bmWindow(env, doc, ui => {
+    assert.ok(!listKeys(ui).some(k => /Equity\s+✓/.test(k)));
+    return ui.ok();
+  });
 });
 
 console.log("\n" + passed + " passed" + (process.exitCode ? ", some FAILED" : ""));

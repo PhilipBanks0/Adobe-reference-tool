@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0 - 2026-11-02
+
+- **New: Bookmarks, from a standard list** (like TicTie Calculate's bookmark templates). Click **Bookmarks** on the toolbar (or *Reference Tool menu → Bookmarks*):
+  - Pick a name from the standard list on the left and click **Bookmark this page**. The window moves on to the next page, so you can work through a binder page by page; **Next page** skips pages that don't need a bookmark.
+  - The window shows the start of each page's text, so you can tell what's on it while the window is open.
+  - Bookmarks always appear in the list's order, whatever order you bookmark the pages in. Indented names become sub-bookmarks, and their heading is added for you.
+  - You can change a bookmark's name before you add it (for example `Bank Statements - Dec`), bookmark the same name on several pages, and **Remove** or **Go to it** from the same window.
+  - **Repaginate** moves the pages so they follow the bookmarks: each bookmark takes the pages after it, up to the next bookmark. Tags, tapes and comments move with their pages.
+  - **Remove all bookmarks** clears them (you choose whether to keep bookmarks that weren't made with this window; ones of yours nested under them are kept too).
+- **Standard lists you can edit:** *Edit templates* (in the window, or *Reference Tool menu → Edit Standard Bookmarks*). It comes with *Year-end file* and *Monthly bookkeeping*; add your own, one name per line, and start a line with two spaces to make it a sub-bookmark. To share a list with the team, copy its text from that window.
+- Each work paper keeps a copy of the list it was bookmarked with, so it opens with the same list on someone else's PC (unless they have their own list with the same name, which is used instead).
+- Bookmarks keep pointing at the right page when pages are inserted, moved or repaginated, and in Acrobat Reader. They do this with a small hidden marker on each bookmarked page; **Replace Page** keeps it, and **Repair Tags** puts it back after Acrobat's own *Replace Pages*.
+
 ## 0.4.2 - 2026-09-25
 
 - **Deleting references is one click each.** Click **Delete** on the reference bar (it turns pink), then click the tags you want gone. Each click deletes that reference straight away, both of its tags and their links. There's no Yes/No/Cancel question any more.

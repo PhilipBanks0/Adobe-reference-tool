@@ -74,13 +74,19 @@ var ART_privActiveDocs = app.trustedFunction(function () {
     return d;
 });
 
+var ART_privMovePage = app.trustedFunction(function (doc, nPage, nAfter) {
+    app.beginPriv();
+    doc.movePage(nPage, nAfter);
+    app.endPriv();
+});
+
 var ART_timer = null;
 var ART_followTimer = null; // reference mode / calculator: follows the page being viewed
 var ART_laterTimer = null;  // runs work just after a button or keystroke event has finished
 var ART_watchTimer = null;  // tape watcher
 
 var ARTool = (function () {
-    var VERSION = "0.4.2";
+    var VERSION = "0.5.0";
     var REPO = "PhilipBanks0/Adobe-reference-tool";
     var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
     var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -2175,11 +2181,14 @@ var ARTool = (function () {
             else { try { ensureTapeButton(doc, present[n], tapeFs(present[n], reg)); } catch (e3) {} }
         }
         cleanTapeButtons(doc, present);
+        var bmFixed = 0;
+        try { bmFixed = repairBookmarks(doc, reg); } catch (e4) {}
         saveReg(doc, reg);
         var msg = "Repair complete.\n\nRestored: " + restored + "\nLinks refreshed: " + linked;
+        if (bmFixed) { msg += "\nBookmarks re-linked to their pages: " + bmFixed; }
         if (skipped.length) { msg += "\n\nCould not restore (page no longer exists):\n" + skipped.join("\n"); }
         app.alert({ cMsg: msg, nIcon: 3, cTitle: "Repair Tags" });
-        return { restored: restored, linked: linked, skipped: skipped.length };
+        return { restored: restored, linked: linked, skipped: skipped.length, bookmarks: bmFixed };
     }
 
     function replacePage(doc) {
@@ -2203,10 +2212,14 @@ var ARTool = (function () {
         var reg = loadReg(doc);
         sync(doc, reg);
         var onPage = getAnnots(doc, p);
+        var otherProps = [];
         var arts = [];
         var others = [];
         var i;
-        for (i = 0; i < onPage.length; i++) { (isArt(onPage[i]) ? arts : others).push(onPage[i]); }
+        var markers = [];
+        for (i = 0; i < onPage.length; i++) { (isArt(onPage[i]) ? arts : isAnchor(onPage[i]) ? markers : others).push(onPage[i]); }
+        // Bookmark markers always go with the page, so its bookmarks keep pointing at it.
+        for (i = 0; i < markers.length; i++) { otherProps.push(markers[i].getProps()); }
 
         var carryOthers = false;
         if (others.length) {
@@ -2219,7 +2232,6 @@ var ARTool = (function () {
         }
         var artNames = [];
         for (i = 0; i < arts.length; i++) { artNames.push(arts[i].name); }
-        var otherProps = [];
         if (carryOthers) { for (i = 0; i < others.length; i++) { otherProps.push(others[i].getProps()); } }
 
         // Take our links off the old page first.
@@ -2252,7 +2264,10 @@ var ARTool = (function () {
             var op = otherProps[i];
             if (op.name && existing[op.name]) { continue; }
             op.page = p;
-            try { doc.addAnnot(op); } catch (e2) {}
+            try {
+                var na = doc.addAnnot(op);
+                if (isAnchor(na)) { na.hidden = true; na.readOnly = true; }
+            } catch (e2) {}
         }
         saveReg(doc, reg);
 
@@ -2264,7 +2279,7 @@ var ARTool = (function () {
                 "\n\nIf the new page's figures sit in different spots, use Move Tag to adjust.";
         }
         app.alert({ cMsg: msg, nIcon: 3, cTitle: "Replace Page" });
-        return { restored: artNames.length, carried: otherProps.length };
+        return { restored: artNames.length, carried: otherProps.length - markers.length, markers: markers.length };
     }
 
     function askLabel(doc, reg, title) {
@@ -2317,6 +2332,1060 @@ var ARTool = (function () {
             "Undo on the bar at the top of the page puts the last one back. Click Done when you've finished.",
             { allPages: true, bar: true, keep: true, buttons: DELETE_BAR_BUTTONS });
         setBarStatus(doc, statusText(data));
+    }
+
+    // -----------------------------------------------------------------------
+    // Standard bookmarks (like TicTie Calculate's bookmark templates).
+    // A template is a list of bookmark names; an indented line is a
+    // sub-bookmark of the line above. The Bookmarks window steps through the
+    // pages: pick a name, click Bookmark this page. Bookmarks are kept in
+    // template order whatever order the pages are bookmarked in, and
+    // Repaginate moves the pages to follow them.
+    //
+    // Each bookmark finds its page through a hidden marker annotation on that
+    // page (like the tags' links), so it stays right when pages are
+    // inserted, moved or repaginated, in Acrobat or Reader.
+    // -----------------------------------------------------------------------
+    var BMK_PREFIX = "ART:B:";
+    var BMK_TPL_KEY = "ART_bmTemplates";
+    var BMK_TPL_CHOICE = "ART_bmTemplate";
+    var BMK_SAVE_LIMIT = 3000;   // Acrobat keeps only a few KB of saved settings
+    var BMK_HINT = "Pick a name on the left, then click Bookmark this page. Use Next page to skip pages that don't need a bookmark.";
+    var BUILTIN_TEMPLATES = [
+        {
+            name: "Year-end file",
+            text: [
+                "Financial Statements",
+                "Trial Balance",
+                "Adjusting Entries",
+                "Cash",
+                "  Bank Reconciliations",
+                "  Bank Statements",
+                "Accounts Receivable",
+                "Inventory",
+                "Prepaid Expenses",
+                "Investments",
+                "Fixed Assets",
+                "  Additions and Disposals",
+                "  Depreciation",
+                "Accounts Payable",
+                "Accrued Liabilities",
+                "Payroll",
+                "Sales Tax",
+                "Income Tax",
+                "Loans",
+                "Equity",
+                "Revenue",
+                "Expenses",
+                "Correspondence"
+            ].join("\n")
+        },
+        {
+            name: "Monthly bookkeeping",
+            text: [
+                "Bank Statements",
+                "Bank Reconciliations",
+                "Credit Card Statements",
+                "Sales",
+                "  Invoices",
+                "  Deposits",
+                "Purchases",
+                "  Bills",
+                "  Receipts",
+                "Payroll",
+                "Sales Tax",
+                "Reports"
+            ].join("\n")
+        }
+    ];
+
+    /**
+     * Template text -> entries [{name, level, parent, path, key, index}].
+     * Indent with two spaces, a tab or ">" per level.
+     */
+    function parseTemplate(text) {
+        var lines = String(text || "").split(/\r\n|\r|\n/);
+        var out = [];
+        var stack = [];
+        var seen = {};
+        for (var i = 0; i < lines.length; i++) {
+            var m = lines[i].match(/^([ \t>\u00a0]*)(.*)$/);
+            var name = trim(m[2]);
+            if (!name) { continue; }
+            var lead = m[1];
+            var lvl = 0;
+            var sp = 0;
+            for (var j = 0; j < lead.length; j++) {
+                var ch = lead.charAt(j);
+                if (ch === ">" || ch === "\t") { lvl++; } else { sp++; }
+            }
+            lvl += Math.floor(sp / 2);
+            if (lvl > stack.length) { lvl = stack.length; }
+            stack.length = lvl;
+            var path = [];
+            for (var k = 0; k < stack.length; k++) { path.push(stack[k].name); }
+            var key = path.concat([name]).join(" > ");
+            if (seen.hasOwnProperty(key)) { stack.push(out[seen[key]]); continue; }
+            var e = { name: name, level: lvl, parent: lvl ? stack[lvl - 1].index : -1, path: path, key: key, index: out.length };
+            seen[key] = out.length;
+            out.push(e);
+            stack.push(e);
+        }
+        return out;
+    }
+
+    function makeTpl(t) {
+        var entries = parseTemplate(t.text);
+        var byKey = {};
+        for (var i = 0; i < entries.length; i++) { byKey[entries[i].key] = i; }
+        return { name: t.name, text: t.text, entries: entries, byKey: byKey };
+    }
+
+    function copyTemplates(list) {
+        var out = [];
+        var seen = {};
+        for (var i = 0; list && i < list.length; i++) {
+            var t = list[i];
+            if (!t || typeof t !== "object") { continue; }
+            var n = trim(t.name || "");
+            if (!n || seen[n.toLowerCase()]) { continue; }
+            seen[n.toLowerCase()] = true;
+            out.push({ name: n, text: String(t.text || "").replace(/\r\n|\r/g, "\n") });
+        }
+        return out;
+    }
+
+    function loadTemplates() {
+        var s = getGlobal(BMK_TPL_KEY, null);
+        var list = copyTemplates(typeof s === "string" ? fromJSON(s) : null);
+        if (!list.length) { list = copyTemplates(cfg.bookmarkTemplates); }
+        if (!list.length) { list = copyTemplates(BUILTIN_TEMPLATES); }
+        return list;
+    }
+
+    /** Save the templates; returns the number of characters stored. */
+    function saveTemplates(list) {
+        var s = toJSON(copyTemplates(list));
+        setGlobal(BMK_TPL_KEY, s);
+        return s.length;
+    }
+
+    function findTemplate(list, name) {
+        for (var i = 0; i < list.length; i++) { if (list[i].name === name) { return i; } }
+        return -1;
+    }
+
+    // ---- register, markers and the bookmark tree ----------------------------
+    function bmReg(reg) {
+        if (!reg.bm || typeof reg.bm !== "object") { reg.bm = {}; }
+        if (!reg.bm.items || typeof reg.bm.items !== "object") { reg.bm.items = {}; }
+        if (!reg.bm.seq) { reg.bm.seq = 1; }
+        return reg.bm;
+    }
+
+    function newBmId() {
+        return new Date().getTime().toString(36) + Math.floor(Math.random() * 1e8).toString(36);
+    }
+
+    function anchorName(id) { return BMK_PREFIX + id; }
+
+    function isAnchor(a) { return !!(a && a.name && String(a.name).indexOf(BMK_PREFIX) === 0); }
+
+    function anchorMap(doc) {
+        var out = {};
+        var all = getAnnots(doc);
+        for (var i = 0; i < all.length; i++) { if (isAnchor(all[i])) { out[all[i].name] = all[i]; } }
+        return out;
+    }
+
+    /** Script run when a bookmark is clicked. Self-contained: needs no add-on. */
+    function bmScript(id, page) {
+        return "(function(d){var t=" + JSON.stringify(anchorName(id)) + ",p=" + Number(page) + ",a=null;" +
+            "try{d.syncAnnotScan();}catch(e){}" +
+            "try{a=d.getAnnots();}catch(e){}" +
+            "if(a){for(var i=0;i<a.length;i++){if(a[i].name==t){p=a[i].page;break;}}}" +
+            "if(p>=0&&p<d.numPages){d.pageNum=p;}})(this);";
+    }
+
+    function addAnchor(doc, id, page, label) {
+        var a = doc.addAnnot({
+            type: "Square",
+            page: page,
+            rect: [0, 0, 2, 2],
+            name: anchorName(id),
+            author: "Reference Tool",
+            subject: "Bookmark marker",
+            contents: "Keeps the bookmark \"" + label + "\" on this page (Reference Tool). Hidden; please leave it.",
+            width: 0,
+            hidden: true,
+            print: false
+        });
+        try { a.hidden = true; } catch (e) {}
+        try { a.readOnly = true; } catch (e2) {}
+        return a;
+    }
+
+    function destroyAnchor(a) {
+        if (!a) { return; }
+        try { a.readOnly = false; } catch (e) {}
+        try { a.destroy(); } catch (e2) {}
+    }
+
+    function bmKids(b) {
+        var c = null;
+        try { c = b.children; } catch (e) {}
+        return c || [];
+    }
+
+    function itemKey(path, name) { return path.concat([name]).join("\u0001"); }
+
+    /**
+     * Read the bookmark tree and match our register items to bookmarks by
+     * their name path (duplicates in the order they were made). Items whose
+     * bookmark is gone (deleted in the Bookmarks pane) are forgotten.
+     */
+    function readTree(doc, reg) {
+        var bm = bmReg(reg);
+        var pool = {};
+        var id;
+        for (id in bm.items) {
+            if (!bm.items.hasOwnProperty(id)) { continue; }
+            var it = bm.items[id];
+            var k = itemKey(it.path || [], String(it.name));
+            (pool[k] = pool[k] || []).push(id);
+        }
+        for (id in pool) {
+            if (pool.hasOwnProperty(id)) { pool[id].sort(function (a, b) { return (bm.items[a].seq || 0) - (bm.items[b].seq || 0); }); }
+        }
+        var root = { bm: doc.bookmarkRoot, name: null, path: [], kids: [], parent: null, id: null };
+        var nodes = [];
+        var byId = {};
+        function walk(parent) {
+            var kids = bmKids(parent.bm);
+            var path = parent.name === null ? [] : parent.path.concat([parent.name]);
+            for (var i = 0; i < kids.length; i++) {
+                var node = { bm: kids[i], name: String(kids[i].name), path: path, kids: [], parent: parent, id: null };
+                var key = itemKey(path, node.name);
+                if (pool[key] && pool[key].length) { node.id = pool[key].shift(); byId[node.id] = node; }
+                parent.kids.push(node);
+                nodes.push(node);
+                walk(node);
+            }
+        }
+        walk(root);
+        for (id in bm.items) {
+            if (bm.items.hasOwnProperty(id) && !byId[id]) { delete bm.items[id]; }
+        }
+        return { root: root, nodes: nodes, byId: byId };
+    }
+
+    /** Current pages from the markers. */
+    function refreshPages(reg, anchors) {
+        var items = bmReg(reg).items;
+        for (var id in items) {
+            if (!items.hasOwnProperty(id)) { continue; }
+            var a = anchors[anchorName(id)];
+            if (a) { items[id].page = a.page; }
+        }
+    }
+
+    /** Where a bookmark sits in the template, or null if it isn't in it. */
+    function nodeIndex(node, reg, tpl) {
+        if (!tpl) { return null; }
+        var it = node.id ? reg.bm.items[node.id] : null;
+        if (it && it.entry && tpl.byKey.hasOwnProperty(it.entry)) { return tpl.byKey[it.entry]; }
+        var key = node.path.concat([node.name]).join(" > ");
+        return tpl.byKey.hasOwnProperty(key) ? tpl.byKey[key] : null;
+    }
+
+    /** Position among siblings that keeps template order. */
+    function insertIndex(parent, idx, reg, tpl) {
+        for (var j = 0; j < parent.kids.length; j++) {
+            var t = nodeIndex(parent.kids[j], reg, tpl);
+            if (t !== null && t > idx) { return j; }
+        }
+        return parent.kids.length;
+    }
+
+    function makeBookmark(doc, reg, parent, pos, name, entryKey, page, auto, anchors) {
+        var bm = bmReg(reg);
+        var id = newBmId();
+        parent.bm.createChild(name, bmScript(id, page), pos);
+        var b = bmKids(parent.bm)[pos];
+        try { if (parent.name !== null) { parent.bm.open = true; } } catch (e) {}
+        var a = addAnchor(doc, id, page, name);
+        anchors[a.name] = a;
+        var path = parent.name === null ? [] : parent.path.concat([parent.name]);
+        bm.items[id] = { name: name, path: path, entry: entryKey, page: page, seq: bm.seq++, auto: !!auto };
+        var node = { bm: b, name: name, path: path, kids: [], parent: parent, id: id };
+        parent.kids.splice(pos, 0, node);
+        return node;
+    }
+
+    /** Point one of our bookmarks at another page. */
+    function repoint(doc, reg, node, page, anchors) {
+        var it = reg.bm.items[node.id];
+        destroyAnchor(anchors[anchorName(node.id)]);
+        var a = addAnchor(doc, node.id, page, it.name);
+        anchors[a.name] = a;
+        try { node.bm.setAction(bmScript(node.id, page)); } catch (e) {}
+        it.page = page;
+    }
+
+    function removeNode(doc, reg, node, anchors) {
+        try { node.bm.remove(); } catch (e) {}
+        if (node.id) {
+            destroyAnchor(anchors[anchorName(node.id)]);
+            delete anchors[anchorName(node.id)];
+            delete reg.bm.items[node.id];
+        }
+        var sib = node.parent.kids;
+        for (var i = 0; i < sib.length; i++) { if (sib[i] === node) { sib.splice(i, 1); break; } }
+    }
+
+    function firstPage(node, reg) {
+        for (var i = 0; i < node.kids.length; i++) {
+            var k = node.kids[i];
+            var it = k.id ? reg.bm.items[k.id] : null;
+            if (it && !it.auto && typeof it.page === "number") { return it.page; }
+            var p = firstPage(k, reg);
+            if (p !== null) { return p; }
+        }
+        return null;
+    }
+
+    /**
+     * Headings the tool added on its own (a parent of a bookmarked name) point
+     * at their first sub-bookmark's page, and go when they have none left.
+     */
+    function refreshHeadings(doc, reg) {
+        var anchors = anchorMap(doc);
+        var map = readTree(doc, reg);
+        refreshPages(reg, anchors);
+        for (var i = map.nodes.length - 1; i >= 0; i--) {
+            var n = map.nodes[i];
+            var it = n.id ? reg.bm.items[n.id] : null;
+            if (!it || !it.auto) { continue; }
+            var p = firstPage(n, reg);
+            if (p === null) {
+                if (!n.kids.length) { removeNode(doc, reg, n, anchors); }
+                continue;
+            }
+            if (p !== it.page || !anchors[anchorName(n.id)]) { repoint(doc, reg, n, p, anchors); }
+        }
+        return map;
+    }
+
+    /** A bookmark was renamed: its sub-bookmarks' stored paths follow. */
+    function renamePaths(reg, prefix, oldName, newName) {
+        var items = bmReg(reg).items;
+        var d = prefix.length;
+        for (var id in items) {
+            if (!items.hasOwnProperty(id)) { continue; }
+            var p = items[id].path || [];
+            if (p.length <= d || p[d] !== oldName) { continue; }
+            var same = true;
+            for (var i = 0; i < d; i++) { if (p[i] !== prefix[i]) { same = false; break; } }
+            if (same) { p[d] = newName; }
+        }
+    }
+
+    /** Bookmark a page with template entry idx (and its parents, if missing). */
+    function bookmarkEntry(doc, reg, tpl, idx, page, label) {
+        var anchors = anchorMap(doc);
+        var map = readTree(doc, reg);
+        refreshPages(reg, anchors);
+        var e = tpl.entries[idx];
+        var chain = [];
+        for (var k = idx; k >= 0; k = tpl.entries[k].parent) { chain.unshift(k); }
+        var parent = map.root;
+        var c;
+        var j;
+        for (c = 0; c < chain.length - 1; c++) {
+            var found = null;
+            for (j = 0; j < parent.kids.length; j++) {
+                if (nodeIndex(parent.kids[j], reg, tpl) === chain[c]) { found = parent.kids[j]; break; }
+            }
+            if (!found) {
+                var pe = tpl.entries[chain[c]];
+                found = makeBookmark(doc, reg, parent, insertIndex(parent, chain[c], reg, tpl), pe.name, pe.key, page, true, anchors);
+            }
+            parent = found;
+        }
+        label = trim(label || "") || e.name;
+        var result = null;
+        for (j = 0; j < parent.kids.length && !result; j++) {
+            var kid = parent.kids[j];
+            if (!kid.id || nodeIndex(kid, reg, tpl) !== idx) { continue; }
+            var it = reg.bm.items[kid.id];
+            if (it.auto) {
+                // A heading the tool made: now it's bookmarked on purpose.
+                it.auto = false;
+                if (label !== it.name) {
+                    try {
+                        kid.bm.name = label;
+                        renamePaths(reg, kid.path, it.name, label);
+                        it.name = label;
+                    } catch (e1) {}
+                }
+                repoint(doc, reg, kid, page, anchors);
+                result = { node: kid, converted: true };
+            } else if (it.page === page) {
+                result = { node: kid, already: true };
+            }
+        }
+        if (!result) {
+            result = { node: makeBookmark(doc, reg, parent, insertIndex(parent, idx, reg, tpl), label, e.key, page, false, anchors) };
+        }
+        refreshHeadings(doc, reg);
+        return result;
+    }
+
+    /** Remove the bookmark for entry idx (the one on `page` if there are several). */
+    function removeEntry(doc, reg, tpl, idx, page) {
+        var anchors = anchorMap(doc);
+        var map = readTree(doc, reg);
+        refreshPages(reg, anchors);
+        var mine = [];
+        var heading = null;
+        for (var i = 0; i < map.nodes.length; i++) {
+            var n = map.nodes[i];
+            if (!n.id || nodeIndex(n, reg, tpl) !== idx) { continue; }
+            if (reg.bm.items[n.id].auto) { heading = n; } else { mine.push(n); }
+        }
+        if (!mine.length) { return { none: true, heading: !!heading }; }
+        var pick = null;
+        for (i = 0; i < mine.length; i++) { if (reg.bm.items[mine[i].id].page === page) { pick = mine[i]; break; } }
+        if (!pick && mine.length === 1) { pick = mine[0]; }
+        if (!pick) {
+            var pages = [];
+            for (i = 0; i < mine.length; i++) { pages.push(reg.bm.items[mine[i].id].page + 1); }
+            return { several: pages };
+        }
+        var it = reg.bm.items[pick.id];
+        var res = { name: it.name, page: it.page };
+        if (pick.kids.length) {
+            // Keep it as a heading over its sub-bookmarks.
+            it.auto = true;
+            res.kept = true;
+        } else {
+            removeNode(doc, reg, pick, anchors);
+        }
+        refreshHeadings(doc, reg);
+        return res;
+    }
+
+    /** {pages: entry index -> [pages], here: names bookmarked on page, other: count} */
+    function scanBookmarks(doc, reg, tpl, page) {
+        var anchors = anchorMap(doc);
+        var map = readTree(doc, reg);
+        refreshPages(reg, anchors);
+        var out = { pages: {}, here: [], other: 0, total: map.nodes.length };
+        for (var i = 0; i < map.nodes.length; i++) {
+            var n = map.nodes[i];
+            var it = n.id ? reg.bm.items[n.id] : null;
+            if (!it) { out.other++; continue; }
+            if (it.auto) { continue; }
+            var t = nodeIndex(n, reg, tpl);
+            if (t !== null) { (out.pages[t] = out.pages[t] || []).push(it.page); }
+            if (it.page === page) { out.here.push(it.name); }
+        }
+        return out;
+    }
+
+    function pageText(doc, p, max) {
+        var n = 0;
+        try { n = doc.getPageNumWords(p); } catch (e) { return null; }
+        var w = [];
+        for (var i = 0; i < n && w.length < max; i++) {
+            var s = "";
+            try { s = trim(doc.getPageNthWord(p, i, false)); } catch (e2) { break; }
+            if (s) { w.push(s); }
+        }
+        return w.join(" ");
+    }
+
+    function rememberTemplate(reg, tpl) {
+        var bm = bmReg(reg);
+        bm.template = tpl.name;
+        bm.tpl = { name: tpl.name, text: tpl.text };
+    }
+
+    // ---- the Bookmarks window ------------------------------------------------
+    function bookmarkDialog(doc, st) {
+        var templates = loadTemplates();
+        var reg = loadReg(doc);
+        var bm = bmReg(reg);
+        // A PDF bookmarked on another PC brings its template along.
+        if (bm.tpl && bm.tpl.name && findTemplate(templates, bm.tpl.name) < 0) {
+            templates.push({ name: String(bm.tpl.name), text: String(bm.tpl.text || "") });
+        }
+        if (!st.tplName || findTemplate(templates, st.tplName) < 0) {
+            st.tplName = bm.template || getGlobal(BMK_TPL_CHOICE, "");
+            if (findTemplate(templates, st.tplName) < 0) { st.tplName = templates[0].name; }
+        }
+        var tpl = makeTpl(templates[findTemplate(templates, st.tplName)]);
+        var keys = [];
+        var scan = null;
+
+        function clampPage() {
+            if (st.page >= doc.numPages) { st.page = doc.numPages - 1; }
+            if (st.page < 0) { st.page = 0; }
+        }
+        function tmplObj() {
+            var o = {};
+            for (var i = 0; i < templates.length; i++) { o[templates[i].name] = templates[i].name === tpl.name ? i + 1 : -(i + 1); }
+            return o;
+        }
+        function listObj() {
+            var o = {};
+            keys = [];
+            for (var i = 0; i < tpl.entries.length; i++) {
+                var e = tpl.entries[i];
+                var s = "";
+                for (var l = 0; l < e.level; l++) { s += "      "; }
+                s += e.name;
+                var pg = scan.pages[i];
+                if (pg) {
+                    var nums = [];
+                    for (var j = 0; j < pg.length; j++) { nums.push(pg[j] + 1); }
+                    nums.sort(function (a, b) { return a - b; });
+                    s += "   \u2713 p." + nums.join(", ");
+                }
+                while (o.hasOwnProperty(s)) { s += " "; }
+                keys.push(s);
+                o[s] = i === st.sel ? i + 1 : -(i + 1);
+            }
+            if (!tpl.entries.length) { o["(No names in this template yet: click Edit templates)"] = -1; }
+            return o;
+        }
+        function pageInfo() {
+            var s = "Page " + (st.page + 1) + " of " + doc.numPages;
+            try {
+                var pl = doc.getPageLabel(st.page);
+                if (pl && String(pl) !== String(st.page + 1)) { s += "  (" + pl + ")"; }
+            } catch (e) {}
+            return s;
+        }
+        function preview() {
+            var t = pageText(doc, st.page, 90);
+            var head = scan.here.length ? "Bookmarked here: " + scan.here.join(", ") + "\n\n" : "";
+            if (t === null) { t = "(This page's text can't be read.)"; }
+            else if (!t) { t = "(No text on this page: it may be a scanned image.)"; }
+            return head + t;
+        }
+        function entryName() {
+            return st.sel >= 0 && st.sel < tpl.entries.length ? tpl.entries[st.sel].name : "";
+        }
+        function show(dlg, listToo) {
+            scan = scanBookmarks(doc, reg, tpl, st.page);
+            var o = { pgno: pageInfo(), ptxt: preview(), stat: st.status || BMK_HINT, advn: !!st.advance,
+                bnam: st.name !== null && st.name !== undefined ? st.name : entryName() };
+            if (listToo) { o.blst = listObj(); o.tmpl = tmplObj(); }
+            dlg.load(o);
+        }
+        function selected(obj) {
+            for (var k in obj) {
+                if (obj.hasOwnProperty(k) && obj[k] > 0) { return obj[k]; }
+            }
+            return 0;
+        }
+        function read(dlg) {
+            var r = dlg.store();
+            if (r.blst) {
+                var v = selected(r.blst);
+                if (v > 0 && v <= tpl.entries.length) { st.sel = v - 1; }
+            }
+            if (r.bnam !== undefined) { st.name = String(r.bnam); }
+            if (r.advn !== undefined) { st.advance = !!r.advn; }
+            return r;
+        }
+        function goPage(p) {
+            st.page = p;
+            clampPage();
+            try { doc.pageNum = st.page; } catch (e) {}
+        }
+
+        var desc = {
+            initialize: function (dlg) {
+                clampPage();
+                show(dlg, true);
+            },
+            tmpl: function (dlg) {
+                var r = read(dlg);
+                var v = selected(r.tmpl || {});
+                if (v > 0 && templates[v - 1] && templates[v - 1].name !== tpl.name) {
+                    tpl = makeTpl(templates[v - 1]);
+                    st.tplName = tpl.name;
+                    setGlobal(BMK_TPL_CHOICE, tpl.name);
+                    st.sel = -1;
+                    st.name = null;
+                    st.status = "Using the " + tpl.name + " template.";
+                    show(dlg, true);
+                }
+            },
+            blst: function (dlg) {
+                var before = st.sel;
+                read(dlg);
+                if (st.sel !== before) { st.name = null; }
+                var pg = scan.pages[st.sel];
+                if (st.sel < 0) { st.status = ""; }
+                else if (pg) {
+                    var nums = [];
+                    for (var j = 0; j < pg.length; j++) { nums.push(pg[j] + 1); }
+                    st.status = tpl.entries[st.sel].key + " is bookmarked on p." + nums.join(", ") + ". Bookmark this page adds another one.";
+                } else {
+                    st.status = "Click Bookmark this page to bookmark page " + (st.page + 1) + " as " + tpl.entries[st.sel].key + ".";
+                }
+                dlg.load({ bnam: st.name !== null ? st.name : entryName(), stat: st.status });
+            },
+            prvp: function (dlg) { read(dlg); goPage(st.page - 1); st.status = ""; show(dlg, false); },
+            nxtp: function (dlg) { read(dlg); goPage(st.page + 1); st.status = ""; show(dlg, false); },
+            addb: function (dlg) {
+                read(dlg);
+                if (st.sel < 0 || st.sel >= tpl.entries.length) {
+                    st.status = "First click the name to use, in the list on the left.";
+                    show(dlg, false);
+                    return;
+                }
+                var label = trim(st.name || "") || entryName();
+                var res = bookmarkEntry(doc, reg, tpl, st.sel, st.page, label);
+                rememberTemplate(reg, tpl);
+                saveReg(doc, reg);
+                if (res.already) {
+                    st.status = label + " is already bookmarked on this page.";
+                } else {
+                    st.status = "Page " + (st.page + 1) + " bookmarked as " + label + ".";
+                    if (st.advance && st.page < doc.numPages - 1) { goPage(st.page + 1); }
+                }
+                st.name = null;
+                show(dlg, true);
+            },
+            remb: function (dlg) {
+                read(dlg);
+                if (st.sel < 0) { st.status = "First click the name whose bookmark should go."; show(dlg, false); return; }
+                var res = removeEntry(doc, reg, tpl, st.sel, st.page);
+                saveReg(doc, reg);
+                var nm = tpl.entries[st.sel].name;
+                if (res.none) { st.status = nm + " has no bookmark" + (res.heading ? " of its own (it only heads its sub-bookmarks)." : "."); }
+                else if (res.several) { st.status = nm + " is on p." + res.several.join(", ") + ". Go to the page whose bookmark should go, then click Remove."; }
+                else if (res.kept) { st.status = res.name + " (p." + (res.page + 1) + ") now only heads its sub-bookmarks."; }
+                else { st.status = "Bookmark " + res.name + " (p." + (res.page + 1) + ") removed."; }
+                show(dlg, true);
+            },
+            gotb: function (dlg) {
+                read(dlg);
+                var pg = st.sel >= 0 ? scan.pages[st.sel] : null;
+                if (!pg) { st.status = st.sel < 0 ? "First click a name in the list." : entryName() + " isn't bookmarked yet."; show(dlg, false); return; }
+                var sorted = pg.slice().sort(function (a, b) { return a - b; });
+                var to = sorted[0];
+                for (var j = 0; j < sorted.length; j++) { if (sorted[j] > st.page) { to = sorted[j]; break; } }
+                goPage(to);
+                st.status = "This is " + entryName() + "'s page.";
+                show(dlg, false);
+            },
+            edtt: function (dlg) { read(dlg); dlg.end("edit"); },
+            repg: function (dlg) { read(dlg); dlg.end("repg"); },
+            clra: function (dlg) { read(dlg); dlg.end("clra"); },
+            commit: function (dlg) { read(dlg); },
+            description: {
+                name: "Bookmarks",
+                elements: [
+                    {
+                        type: "view",
+                        align_children: "align_row",
+                        elements: [
+                            { type: "static_text", name: "Standard bookmarks:" },
+                            { type: "popup", item_id: "tmpl", width: 220 },
+                            { type: "button", item_id: "edtt", name: "Edit templates..." }
+                        ]
+                    },
+                    {
+                        type: "view",
+                        align_children: "align_row",
+                        elements: [
+                            { type: "list_box", item_id: "blst", width: 300, height: 390 },
+                            {
+                                type: "view",
+                                align_children: "align_left",
+                                elements: [
+                                    {
+                                        type: "view",
+                                        align_children: "align_row",
+                                        elements: [
+                                            { type: "button", item_id: "prvp", name: "< Previous page" },
+                                            { type: "edit_text", item_id: "pgno", readonly: true, width: 150 },
+                                            { type: "button", item_id: "nxtp", name: "Next page >" }
+                                        ]
+                                    },
+                                    { type: "edit_text", item_id: "ptxt", multiline: true, readonly: true, width: 340, height: 170 },
+                                    { type: "static_text", name: "Bookmark name (change it here if you like):" },
+                                    { type: "edit_text", item_id: "bnam", width: 340 },
+                                    {
+                                        type: "view",
+                                        align_children: "align_row",
+                                        elements: [
+                                            { type: "button", item_id: "addb", name: "Bookmark this page" },
+                                            { type: "button", item_id: "remb", name: "Remove" },
+                                            { type: "button", item_id: "gotb", name: "Go to it" }
+                                        ]
+                                    },
+                                    { type: "check_box", item_id: "advn", name: "Go to the next page after bookmarking" },
+                                    { type: "edit_text", item_id: "stat", multiline: true, readonly: true, width: 340, height: 48 }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        type: "view",
+                        align_children: "align_row",
+                        elements: [
+                            { type: "button", item_id: "repg", name: "Repaginate..." },
+                            { type: "button", item_id: "clra", name: "Remove all bookmarks..." },
+                            { type: "static_text", name: "                              " },
+                            { type: "ok", ok_name: "Done" }
+                        ]
+                    }
+                ]
+            }
+        };
+        return app.execDialog(desc);
+    }
+
+    /** Toolbar/menu: the Bookmarks window. */
+    function bookmarks(doc) {
+        if (capture) { cancelCapture(doc); }
+        var st = { page: doc.pageNum, sel: -1, name: null, status: "", advance: getGlobal("ART_bmAdvance", true), tplName: null };
+        var r;
+        while (true) {
+            r = bookmarkDialog(doc, st);
+            setGlobal("ART_bmAdvance", !!st.advance);
+            if (r === "edit") {
+                var nm = editTemplates(doc, st.tplName);
+                if (nm) { st.tplName = nm; setGlobal(BMK_TPL_CHOICE, nm); }
+                st.sel = -1;
+                st.name = null;
+                st.status = "";
+                continue;
+            }
+            if (r === "clra") {
+                var res = removeAllBookmarks(doc);
+                st.status = res ? "Removed " + res.removed + " bookmark(s)." +
+                    (res.kept ? " Kept " + res.kept + " that have your own bookmarks under them." : "") : "";
+                continue;
+            }
+            if (r === "repg") { return repaginate(doc); }
+            return r;
+        }
+    }
+
+    // ---- template editor -----------------------------------------------------
+    function editTemplates(doc, current) {
+        var list = loadTemplates();
+        var cur = Math.max(0, findTemplate(list, current));
+        var note = "";
+
+        function tmplObj() {
+            var o = {};
+            for (var i = 0; i < list.length; i++) {
+                var n = list[i].name;
+                while (o.hasOwnProperty(n)) { n += " "; }
+                o[n] = i === cur ? i + 1 : -(i + 1);
+            }
+            return o;
+        }
+        function show(dlg) {
+            dlg.load({ tmpl: tmplObj(), tnam: list[cur].name, tlns: list[cur].text, stat: note });
+        }
+        function read(dlg) {
+            var r = dlg.store();
+            if (r.tlns !== undefined) { list[cur].text = String(r.tlns).replace(/\r\n|\r/g, "\n"); }
+            if (r.tnam !== undefined && trim(r.tnam)) { list[cur].name = trim(r.tnam); }
+            return r;
+        }
+        function uniqueName(base) {
+            var n = base;
+            var k = 2;
+            while (findTemplate(list, n) >= 0) { n = base + " " + k++; }
+            return n;
+        }
+        function problem() {
+            var seen = {};
+            for (var i = 0; i < list.length; i++) {
+                var n = list[i].name.toLowerCase();
+                if (seen[n]) { return "Two templates are called " + list[i].name + ". Please give each its own name."; }
+                seen[n] = true;
+            }
+            return "";
+        }
+        var desc = {
+            initialize: function (dlg) { show(dlg); },
+            tmpl: function (dlg) {
+                var r = read(dlg);
+                for (var k in r.tmpl) {
+                    if (r.tmpl.hasOwnProperty(k) && r.tmpl[k] > 0 && list[r.tmpl[k] - 1]) { cur = r.tmpl[k] - 1; }
+                }
+                note = "";
+                show(dlg);
+            },
+            tnam: function (dlg) { read(dlg); note = ""; show(dlg); },
+            newt: function (dlg) {
+                read(dlg);
+                list.push({ name: uniqueName("New template"), text: "" });
+                cur = list.length - 1;
+                note = "Type a name for the template, then its bookmarks, one per line.";
+                show(dlg);
+            },
+            delt: function (dlg) {
+                read(dlg);
+                if (list.length < 2) { note = "Keep at least one template."; show(dlg); return; }
+                note = "Deleted " + list[cur].name + ". Cancel brings it back.";
+                list.splice(cur, 1);
+                cur = 0;
+                show(dlg);
+            },
+            bltn: function (dlg) {
+                read(dlg);
+                var added = [];
+                for (var i = 0; i < BUILTIN_TEMPLATES.length; i++) {
+                    if (findTemplate(list, BUILTIN_TEMPLATES[i].name) < 0) {
+                        list.push({ name: BUILTIN_TEMPLATES[i].name, text: BUILTIN_TEMPLATES[i].text });
+                        added.push(BUILTIN_TEMPLATES[i].name);
+                    }
+                }
+                note = added.length ? "Added " + added.join(" and ") + "." : "The built-in templates are already here.";
+                show(dlg);
+            },
+            validate: function (dlg) {
+                read(dlg);
+                var p = problem();
+                if (p) { note = p; show(dlg); return false; }
+                return true;
+            },
+            commit: function (dlg) { read(dlg); },
+            description: {
+                name: "Standard Bookmark Templates",
+                elements: [
+                    {
+                        type: "view",
+                        align_children: "align_row",
+                        elements: [
+                            { type: "static_text", name: "Template:" },
+                            { type: "popup", item_id: "tmpl", width: 220 },
+                            { type: "button", item_id: "newt", name: "New template" },
+                            { type: "button", item_id: "delt", name: "Delete template" }
+                        ]
+                    },
+                    {
+                        type: "view",
+                        align_children: "align_row",
+                        elements: [
+                            { type: "static_text", name: "Name:" },
+                            { type: "edit_text", item_id: "tnam", width: 300 }
+                        ]
+                    },
+                    { type: "static_text", name: "One bookmark per line, in the order they should appear." },
+                    { type: "static_text", name: "Start a line with two spaces (or >) to make it a sub-bookmark of the line above." },
+                    { type: "edit_text", item_id: "tlns", multiline: true, width: 460, height: 340 },
+                    { type: "edit_text", item_id: "stat", readonly: true, width: 460 },
+                    {
+                        type: "view",
+                        align_children: "align_row",
+                        elements: [
+                            { type: "button", item_id: "bltn", name: "Add the built-in templates back" },
+                            { type: "static_text", name: "          " },
+                            { type: "ok_cancel", ok_name: "Save" }
+                        ]
+                    }
+                ]
+            }
+        };
+        if (app.execDialog(desc) !== "ok") { return null; }
+        var size = saveTemplates(list);
+        if (size > BMK_SAVE_LIMIT) {
+            app.alert({
+                cTitle: "Standard Bookmark Templates",
+                nIcon: 1,
+                cMsg: "Saved, but your templates are large (" + size + " characters). Acrobat only keeps about " +
+                    "4,000 characters of add-on settings between sessions, so some may not be there after you restart Acrobat.\n\n" +
+                    "Delete templates you don't use, or shorten them. Work papers you've bookmarked keep their own copy of their template either way."
+            });
+        }
+        return list[cur] ? list[cur].name : null;
+    }
+
+    // ---- Remove all / Repaginate ---------------------------------------------
+    function removeAllBookmarks(doc) {
+        var reg = loadReg(doc);
+        var anchors = anchorMap(doc);
+        var map = readTree(doc, reg);
+        var ours = 0;
+        for (var i = 0; i < map.nodes.length; i++) { if (map.nodes[i].id) { ours++; } }
+        var others = map.nodes.length - ours;
+        if (!map.nodes.length) {
+            app.alert({ cTitle: "Bookmarks", nIcon: 3, cMsg: "This PDF has no bookmarks." });
+            return null;
+        }
+        var all;
+        if (others && ours) {
+            var ans = app.alert({
+                cTitle: "Remove all bookmarks", nIcon: 2, nType: 3,
+                cMsg: "This PDF has " + ours + " bookmark(s) made with the Bookmarks window and " + others + " other bookmark(s).\n\n" +
+                    "Yes: remove all " + map.nodes.length + "\nNo: remove only the " + ours + " made with the Bookmarks window\nCancel: keep them all"
+            });
+            if (ans === 2) { return null; }
+            all = ans === 4;
+        } else {
+            if (app.alert({ cTitle: "Remove all bookmarks", nIcon: 2, nType: 2,
+                cMsg: "Remove all " + map.nodes.length + " bookmark(s) in this PDF?" }) !== 4) { return null; }
+            all = true;
+        }
+        function hasOther(node) {
+            for (var c = 0; c < node.kids.length; c++) {
+                if (!node.kids[c].id || hasOther(node.kids[c])) { return true; }
+            }
+            return false;
+        }
+        function wentWithParent(node) {
+            for (var p = node.parent; p; p = p.parent) { if (p.gone) { return true; } }
+            return false;
+        }
+        var removed = 0;
+        var kept = 0;
+        var items = bmReg(reg).items;
+        for (i = 0; i < map.nodes.length; i++) {
+            var n = map.nodes[i];
+            if (wentWithParent(n)) {
+                n.gone = true;
+                removed++;
+                continue;
+            }
+            if (!all && (!n.id || hasOther(n))) {
+                if (n.id) { kept++; }             // it holds someone's own bookmarks: leave it
+                continue;
+            }
+            try { n.bm.remove(); } catch (e) {}
+            n.gone = true;
+            removed++;
+        }
+        for (i = 0; i < map.nodes.length; i++) {
+            if (map.nodes[i].gone && map.nodes[i].id) { delete items[map.nodes[i].id]; }
+        }
+        // Markers of removed bookmarks (and any left behind earlier) go too.
+        for (var nm in anchors) {
+            if (anchors.hasOwnProperty(nm) && !items[nm.slice(BMK_PREFIX.length)]) { destroyAnchor(anchors[nm]); }
+        }
+        saveReg(doc, reg);
+        return { removed: removed, kept: kept };
+    }
+
+    /** New page order: pages before the first bookmark, then each bookmark's pages in bookmark order. */
+    function repaginatePlan(doc, reg) {
+        var anchors = anchorMap(doc);
+        var map = readTree(doc, reg);
+        refreshPages(reg, anchors);
+        var n = doc.numPages;
+        var seq = [];
+        var startSet = {};
+        for (var i = 0; i < map.nodes.length; i++) {
+            var it = map.nodes[i].id ? reg.bm.items[map.nodes[i].id] : null;
+            if (it && typeof it.page === "number" && it.page >= 0 && it.page < n) {
+                seq.push(it.page);
+                startSet[it.page] = true;
+            }
+        }
+        if (!seq.length) { return null; }
+        var starts = [];
+        for (var s in startSet) { if (startSet.hasOwnProperty(s)) { starts.push(Number(s)); } }
+        starts.sort(function (a, b) { return a - b; });
+        var order = [];
+        for (i = 0; i < starts[0]; i++) { order.push(i); }
+        var done = {};
+        for (i = 0; i < seq.length; i++) {
+            var st = seq[i];
+            if (done[st]) { continue; }
+            done[st] = true;
+            var end = n;
+            for (var k = 0; k < starts.length; k++) { if (starts[k] > st) { end = starts[k]; break; } }
+            for (var q = st; q < end; q++) { order.push(q); }
+        }
+        return order;
+    }
+
+    function countMoves(order) {
+        var cur = [];
+        var i;
+        for (i = 0; i < order.length; i++) { cur.push(i); }
+        var moves = 0;
+        for (i = 0; i < order.length; i++) {
+            var at = cur.indexOf(order[i]);
+            if (at !== i) { cur.splice(at, 1); cur.splice(i, 0, order[i]); moves++; }
+        }
+        return moves;
+    }
+
+    function repaginate(doc) {
+        if (capture) { cancelCapture(doc); }
+        var reg = loadReg(doc);
+        var order = repaginatePlan(doc, reg);
+        if (!order) {
+            app.alert({ cTitle: "Repaginate", nIcon: 3, cMsg: "There are no bookmarks from the Bookmarks window in this PDF yet, so there's no order to follow." });
+            return { moved: 0 };
+        }
+        var moves = countMoves(order);
+        if (!moves) {
+            app.alert({ cTitle: "Repaginate", nIcon: 3, cMsg: "The pages already follow the bookmark order." });
+            return { moved: 0 };
+        }
+        if (app.alert({
+            cTitle: "Repaginate", nIcon: 2, nType: 2,
+            cMsg: "Put the pages in bookmark order? " + moves + " page(s) will move.\n\n" +
+                "Each bookmark takes the pages that follow it, up to the next bookmark. Pages before the first bookmark stay at the front. " +
+                "Tags, tapes and comments move with their pages.\n\n" +
+                "Acrobat can't undo this, so save first if you might want the old order back."
+        }) !== 4) { return { moved: 0 }; }
+        var cur = [];
+        var i;
+        for (i = 0; i < order.length; i++) { cur.push(i); }
+        for (i = 0; i < order.length; i++) {
+            var at = cur.indexOf(order[i]);
+            if (at !== i) {
+                ART_privMovePage(doc, at, i - 1);
+                cur.splice(at, 1);
+                cur.splice(i, 0, order[i]);
+            }
+        }
+        // The markers moved with their pages; update each bookmark's fallback page too.
+        var anchors = anchorMap(doc);
+        var map = readTree(doc, reg);
+        refreshPages(reg, anchors);
+        for (i = 0; i < map.nodes.length; i++) {
+            var node = map.nodes[i];
+            if (node.id) { try { node.bm.setAction(bmScript(node.id, reg.bm.items[node.id].page)); } catch (e) {} }
+        }
+        sync(doc, reg);
+        saveReg(doc, reg);
+        try { doc.pageNum = 0; } catch (e2) {}
+        app.alert({ cTitle: "Repaginate", nIcon: 3, cMsg: "Done: the pages now follow the bookmarks (" + moves + " moved)." });
+        return { moved: moves };
+    }
+
+    /** Repair Tags: put back markers lost outside the tool (e.g. Acrobat's own Replace Pages). */
+    function repairBookmarks(doc, reg) {
+        var anchors = anchorMap(doc);
+        var map = readTree(doc, reg);
+        var fixed = 0;
+        for (var i = 0; i < map.nodes.length; i++) {
+            var node = map.nodes[i];
+            if (!node.id || anchors[anchorName(node.id)]) { continue; }
+            var it = reg.bm.items[node.id];
+            if (typeof it.page !== "number" || it.page < 0 || it.page >= doc.numPages) { continue; }
+            var a = addAnchor(doc, node.id, it.page, it.name);
+            anchors[a.name] = a;
+            try { node.bm.setAction(bmScript(node.id, it.page)); } catch (e) {}
+            fixed++;
+        }
+        return fixed;
     }
 
     // -----------------------------------------------------------------------
@@ -2467,6 +3536,8 @@ var ARTool = (function () {
                 "Delete Tag: click tags to delete them (both tags of the reference go); Undo on the bar puts the last one back.\n" +
                 "Calc Tape: type amounts with + - * / (e.g. 12400+800-250*12+) and press Enter; " +
                 "Place on page, then click where the tape goes. Double-click a tape to change it; drag a corner to resize it.\n" +
+                "Bookmarks: step through the pages and click a name from your standard list to bookmark each one; " +
+                "Repaginate puts the pages in bookmark order. Edit Standard Bookmarks changes the lists.\n" +
                 "Tag Check: list all tags and flag unmatched or broken ones.\n" +
                 "Replace Page: swap in a new version of a page and keep its tags.\n" +
                 "Repair Tags: restore tags or tapes lost outside the tool.\n\n" +
@@ -2549,6 +3620,28 @@ var ARTool = (function () {
             ".....wwwwwwwwww.....",
             ".....wkkkkkkw.......",
             ".....wwwwwwww......."
+        ],
+        bookmarks: [
+            "............rrrrrr..",
+            "............rrrrrr..",
+            "..kkkkkkkkkkrrrrrr..",
+            "..kwwwwwwwwwrrrrrr..",
+            "..kwbbbbbbwwrrrrrr..",
+            "..kwwwwwwwwwrrrrrr..",
+            "..kwbbbbbwwwrrrrrr..",
+            "..kwwwwwwwwwrrrrrr..",
+            "..kwbbbbbbwwrrwwrr..",
+            "..kwwwwwwwwwrwwwwr..",
+            "..kwbbbbbbbbbbbwk...",
+            "..kwwwwwwwwwwwwwk...",
+            "..kwbbbbbbbbbwwwk...",
+            "..kwwwwwwwwwwwwwk...",
+            "..kwbbbbbbbbbbbwk...",
+            "..kwwwwwwwwwwwwwk...",
+            "..kwbbbbbbwwwwwwk...",
+            "..kwwwwwwwwwwwwwk...",
+            "..kwwwwwwwwwwwwwk...",
+            "..kkkkkkkkkkkkkkk..."
         ],
         tagCheck: [
             "....................",
@@ -2638,11 +3731,14 @@ var ARTool = (function () {
     var COMMANDS = [
         { id: "placeTag", label: "Reference Tool", short: "Reference", tip: "Reference tool: click a figure, then its match. Click again to finish.", toolbar: true },
         { id: "calcTape", label: "Calc Tape", tip: "Calculator that leaves a tape on the page (select a tape first to change it)", toolbar: true },
+        { id: "bookmarks", label: "Bookmarks", tip: "Bookmark pages from your standard list; Repaginate puts the pages in bookmark order", toolbar: true },
         { id: "tagCheck", label: "Tag Check", tip: "List all tags and flag unmatched or broken ones", toolbar: true },
         { id: "replacePage", label: "Replace Page (Keep Tags)", tip: "Replace this page and keep its tags and tapes", toolbar: true },
         { id: "repairTags", label: "Repair Tags", tip: "Restore lost tags/tapes and refresh links", toolbar: true },
         { id: "moveTag", label: "Move Tag", tip: "Move a tag to a new spot", toolbar: false },
         { id: "deleteTag", label: "Delete Tag", tip: "Click a tag to delete it", toolbar: false },
+        { id: "repaginate", label: "Repaginate by Bookmarks", tip: "Reorder the pages to follow the bookmarks", toolbar: false },
+        { id: "editBookmarkTemplates", label: "Edit Standard Bookmarks", tip: "Change the standard bookmark lists", toolbar: false },
         { id: "checkForUpdates", label: "Check for Updates", tip: "See if a newer version is available", toolbar: false },
         { id: "about", label: "About / Help", tip: "How to use the Reference Tool", toolbar: false }
     ];
@@ -2657,11 +3753,14 @@ var ARTool = (function () {
         repairTags: repairTags,
         moveTag: moveTag,
         deleteTag: deleteTag,
+        bookmarks: bookmarks,
+        repaginate: repaginate,
+        editBookmarkTemplates: function (doc) { return editTemplates(doc, getGlobal(BMK_TPL_CHOICE, "")); },
         about: about,
         checkForUpdates: function (doc) { return checkForUpdates(doc, false); },
         run: function (id, doc) {
             try {
-                if (!doc && id !== "about" && id !== "checkForUpdates") { app.alert("Open a PDF first."); return; }
+                if (!doc && id !== "about" && id !== "checkForUpdates" && id !== "editBookmarkTemplates") { app.alert("Open a PDF first."); return; }
                 rememberDoc(doc);
                 return api[id](doc);
             } catch (e) {
@@ -2724,6 +3823,9 @@ var ARTool = (function () {
             makeIcon: makeIcon,
             tapePreview: tapePreview,
             runEntry: runEntry,
+            parseTemplate: parseTemplate,
+            repaginatePlan: repaginatePlan,
+            builtinTemplates: BUILTIN_TEMPLATES,
             icons: ICONS
         },
         installUI: function () {
