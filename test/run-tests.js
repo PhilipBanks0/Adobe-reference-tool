@@ -1409,7 +1409,8 @@ const markers = doc => doc._annots.filter(a => a.name.startsWith("ART:B:"));
 test("bookmark templates: indented lines become sub-bookmarks", () => {
   const { parseTemplate, builtinTemplates } = makeEnv().ART._internal;
   const e = parseTemplate("Cash\n  Bank Rec\n\tStatements\n> Petty cash\n\n    Till counts\nAR\r\nAR\n  Aging\n        Too deep");
-  assert.deepStrictEqual(e.map(x => x.key), ["Cash", "Cash > Bank Rec", "Cash > Statements", "Cash > Petty cash",
+  // Array.from: the add-on's arrays come from the mock Acrobat's context, which deepStrictEqual treats as a different type.
+  assert.deepStrictEqual(Array.from(e, x => x.key), ["Cash", "Cash > Bank Rec", "Cash > Statements", "Cash > Petty cash",
     "Cash > Petty cash > Till counts", "AR", "AR > Aging", "AR > Aging > Too deep"]);
   assert.strictEqual(e[1].parent, 0);
   assert.strictEqual(e[6].parent, 5, "a repeated line is the same bookmark");
