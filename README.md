@@ -5,7 +5,7 @@ An Acrobat add-on for preparing accounting work papers.
 | Feature | What it does |
 |---|---|
 | **Reference** | Click a figure in the financial statements, then its match in the support. Numbers run on automatically (A-1, A-2, …), and clicking either tag jumps to the other. |
-| **Calc Tape** | A 10-key style calculator that leaves its tape on the page as a comment, so the reviewer can see how a figure was worked out. Double-click a tape to change it. |
+| **Calc Tape** | A 10-key style calculator that leaves its tape on the page as a comment, so the reviewer can see how a figure was worked out. Double-click a tape to change it, or to place a changed copy. |
 | **Bookmarks** | Bookmarks pages from a standard list (like TicTie Calculate's bookmark templates): step through the pages and click a name for each. **Repaginate** then puts the pages in bookmark order. |
 | **Tag Check** | Lists every tag with its page numbers and flags tags that are unmatched or broken. |
 | **Replace Page (Keep Tags)** | Swaps a page for a new version (for example a reissued bank statement) and puts back the tags and tapes that were on it. |
@@ -156,6 +156,7 @@ To jump between the two sides of a reference, click either tag with the normal H
 The tape records your initials and the date. After it's placed:
 
 - **Change it:** double-click its figures. The calculator opens with everything filled in; change it and click **Update tape**. (Or select the tape and click **Calc Tape**.)
+- **Copy it:** open it the same way and click **Place as new tape**, then click where the copy should go. The copy has your changes; the original stays as it was. Click it without changing anything for an exact copy, for example to start next year's version of a tape.
 - **Move it:** drag it by its title line or edge.
 - **Resize it:** drag a corner or edge. The text grows or shrinks to fit, so nothing is cut off.
 
@@ -260,6 +261,7 @@ The mock can't show how Acrobat itself behaves, so a manual check in Acrobat Pro
 - [ ] Calc Tape: the tape's columns line up in a monospaced font.
 - [ ] Calc Tape: `12400+800-250*12+` then Enter adds three lines, the Amount box clears, and the cursor stays in it.
 - [ ] Double-click a tape's figures: the calculator opens filled in; Update tape changes it in place.
+- [ ] Place as new tape: click on the page puts a changed copy there; the original is unchanged.
 - [ ] Drag a tape's corner smaller and larger: the text re-fits and isn't cut off. Drag it by the title line to move it.
 - [ ] A reference tag placed on a tape's total still jumps to its match.
 - [ ] Open a PDF with tapes, just look, close: Acrobat doesn't ask to save.

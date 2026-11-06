@@ -86,7 +86,7 @@ var ART_laterTimer = null;  // runs work just after a button or keystroke event 
 var ART_watchTimer = null;  // tape watcher
 
 var ARTool = (function () {
-    var VERSION = "0.5.0";
+    var VERSION = "0.5.1";
     var REPO = "PhilipBanks0/Adobe-reference-tool";
     var RELEASES_URL = "https://github.com/" + REPO + "/releases/latest";
     var LATEST_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
@@ -1832,7 +1832,7 @@ var ARTool = (function () {
     /** The calculator window. Returns d filled in, or null if cancelled. */
     function tapeDialog(d) {
         function status() {
-            return d.status || (d.editing ? "Changing this tape: edit it, then click Update tape" : "Type an amount, then Enter");
+            return d.status || (d.editing ? "Update tape changes this tape; Place as new tape adds a copy and leaves this one as it is" : "Type an amount, then Enter");
         }
         function show(dlg, focusAmount) {
             var p = previewText(d);
@@ -1874,6 +1874,15 @@ var ARTool = (function () {
                 runEntry(d, d.entr);
                 show(dlg, true);
                 return false;
+            },
+            // Changing a tape: put the result on the page as another tape instead.
+            newt: function (dlg) {
+                read(dlg);
+                if (trim(d.entr)) {
+                    runEntry(d, d.entr);
+                    if (trim(d.entr)) { show(dlg, true); return; }   // couldn't read it: it's explained
+                }
+                dlg.end("copy");
             },
             commit: function (dlg) { read(dlg); },
             description: {
@@ -1923,10 +1932,20 @@ var ARTool = (function () {
                             ]
                         }
                     ]
-                }, { type: "ok_cancel", ok_name: d.editing ? "Update tape" : "Place on page" }]
+                }, d.editing ? {
+                    type: "view",
+                    align_children: "align_row",
+                    elements: [
+                        { type: "button", item_id: "newt", name: "Place as new tape" },
+                        { type: "ok_cancel", ok_name: "Update tape" }
+                    ]
+                } : { type: "ok_cancel", ok_name: "Place on page" }]
             }
         };
-        return app.execDialog(desc) === "ok" ? d : null;
+        var res = app.execDialog(desc);
+        if (res !== "ok" && res !== "copy") { return null; }
+        d.asNew = res === "copy";
+        return d;
     }
 
     /** Open the calculator (new, or changing a tape) and act on the result. */
@@ -1948,6 +1967,12 @@ var ARTool = (function () {
         setGlobal("ART_initials", d.init || "");
         var text = formatTape(d.titl, calc, d.init);
         var src = { titl: trim(d.titl || ""), ents: String(d.ents).replace(/\r\n|\r/g, "\n").replace(/\s+$/, ""), init: trim(d.init || "") };
+        if (d.asNew) {
+            // A copy: the tape it came from stays as it is.
+            d.editing = null;
+            d.asNew = false;
+            d.status = "";
+        }
         if (d.editing) {
             var a = findTape(doc, d.editing, d.editPage);
             if (a) {
