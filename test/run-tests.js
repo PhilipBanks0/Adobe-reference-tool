@@ -722,7 +722,7 @@ test("changing a tape: Place as new tape adds a changed copy and leaves the orig
   const name = tape.name; const before = tape.contents;
   let seen;
   env.dialogScripts.push(ui => {
-    seen = ui.d.description.elements[1].elements.map(e => e.name || e.ok_name);
+    seen = Array.from(ui.d.description.elements[1].elements, e => e.name || e.ok_name);
     ui.type("titl", "Rent - 2027"); ui.leave("titl");
     ui.type("entr", "100+");                         // still in the box: added before the copy is made
     return ui.click("newt");
