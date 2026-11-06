@@ -268,7 +268,10 @@ function makeTape(env, doc, t, x, y) {
   doc.click(x, y);
   return doc._annots.filter(a => a.name.startsWith("ART:P:")).pop();
 }
-const okName = ui => ui.d.description.elements[ui.d.description.elements.length - 1].ok_name;
+const okName = ui => {
+  const last = ui.d.description.elements[ui.d.description.elements.length - 1];
+  return last.ok_name || (last.elements || []).map(e => e.ok_name).filter(Boolean)[0];
+};
 const tapeBtn = (doc, tape) => doc._fields["ART_TBTN." + tape.name.slice(6)];
 const doubleClick = (doc, tape, x, y) => { const n = "ART_TBTN." + tape.name.slice(6); doc.press(n, x, y); doc.press(n, x, y); };
 const followLink = (env, doc, link) => { new (vm.runInContext("Function", env.ctx))(link.action).call(doc); return doc.pageNum; };
@@ -711,6 +714,61 @@ test("double-click a tape: the calculator opens filled in, and Update changes th
   assert.strictEqual(JSON.parse(doc.info.ARTRegister).items[name].src.ents, "250 x 12\n-500 credit\n100");
   const b = tapeBtn(doc, after[0]);
   assert.ok(b.rect[1] > after[0].rect[1] && b.rect[1] < after[0].rect[3], "button follows the taller tape");
+});
+
+test("changing a tape: Place as new tape adds a changed copy and leaves the original", () => {
+  const env = makeEnv(); const doc = new env.Doc(2);
+  const tape = makeTape(env, doc, { titl: "Rent", ents: "250 x 12", init: "GR" }, 60, 600);
+  const name = tape.name; const before = tape.contents;
+  let seen;
+  env.dialogScripts.push(ui => {
+    seen = Array.from(ui.d.description.elements[1].elements, e => e.name || e.ok_name);
+    ui.type("titl", "Rent - 2027"); ui.leave("titl");
+    ui.type("entr", "100+");                         // still in the box: added before the copy is made
+    return ui.click("newt");
+  });
+  doubleClick(doc, tape, 80, 560);
+  assert.deepStrictEqual(seen, ["Place as new tape", "Update tape"]);
+  assert.ok(doc.getField("ART_CAP.p0"), "waits for a click to place the copy");
+  doc.click(300, 500, 1);
+  const tapes = doc._annots.filter(a => a.name.startsWith("ART:P:"));
+  assert.strictEqual(tapes.length, 2, "a second tape");
+  const orig = tapes.find(a => a.name === name);
+  const copy = tapes.find(a => a.name !== name);
+  assert.strictEqual(orig.contents, before, "the original is unchanged");
+  assert.strictEqual(copy.page, 1);
+  assert.ok(/^TAPE: Rent - 2027/.test(copy.contents), copy.contents);
+  assert.ok(/3,100\.00  T  Total/.test(copy.contents), copy.contents);
+  assert.ok(tapeBtn(doc, copy), "the copy can be double-clicked too");
+  env.runIntervals(2);
+  assert.strictEqual(env.followTimers(), 0, "the page timer stops once the copy is placed");
+  assert.ok(!Object.keys(doc._fields).some(k => k.startsWith("ART_CAP.")), "click areas removed from every page");
+  const items = JSON.parse(doc.info.ARTRegister).items;
+  assert.strictEqual(items[copy.name].src.ents, "250 x 12\n100");
+  assert.strictEqual(items[name].src.ents, "250 x 12");
+  // The copy opens as itself.
+  let opened;
+  env.dialogScripts.push(ui => { opened = ui.get("titl"); return "cancel"; });
+  doubleClick(doc, copy, copy.rect[0] + 20, copy.rect[1] + 20);
+  assert.strictEqual(opened, "Rent - 2027");
+});
+
+test("Place as new tape with nothing changed duplicates the tape; a new tape has no such button", () => {
+  const env = makeEnv(); const doc = new env.Doc(1);
+  const tape = makeTape(env, doc, { titl: "Cash", ents: "5\n6" }, 60, 600);
+  doc.selectedAnnots = [tape];
+  env.dialogScripts.push(ui => ui.click("newt"));
+  env.ART.run("calcTape", doc);
+  doc.click(300, 300);
+  const tapes = doc._annots.filter(a => a.name.startsWith("ART:P:"));
+  assert.strictEqual(tapes.length, 2);
+  assert.strictEqual(tapes[0].contents, tapes[1].contents);
+  assert.notStrictEqual(tapes[0].name, tapes[1].name);
+  doc.selectedAnnots = [];
+  let labels;
+  env.dialogScripts.push(ui => { labels = JSON.stringify(ui.d.description.elements[1]); return "cancel"; });
+  env.ART.run("calcTape", doc);
+  assert.ok(!/Place as new tape/.test(labels) && /Place on page/.test(labels));
 });
 
 test("select a tape and click Calc Tape: opens it for changing", () => {

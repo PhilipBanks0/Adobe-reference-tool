@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1 - 2026-11-05
+
+- **Copy a tape:** when you change a tape (double-click it, or select it and click **Calc Tape**), the calculator now has **Place as new tape** next to **Update tape**. It puts the changed tape on the page as a new tape, where you click, and leaves the original as it was. Click it without changing anything to make an exact copy. The copy can be changed later like any other tape.
+- **A tape can go on any page.** After you click **Place on page** (or **Place as new tape**), go to whichever page it belongs on and click there. Before, it had to go on the page you were viewing when you opened the calculator.
+
 ## 0.5.0 - 2026-11-02
 
 - **New: Bookmarks, from a standard list** (like TicTie Calculate's bookmark templates). Click **Bookmarks** on the toolbar (or *Reference Tool menu → Bookmarks*):
