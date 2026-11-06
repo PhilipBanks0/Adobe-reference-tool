@@ -740,6 +740,9 @@ test("changing a tape: Place as new tape adds a changed copy and leaves the orig
   assert.ok(/^TAPE: Rent - 2027/.test(copy.contents), copy.contents);
   assert.ok(/3,100\.00  T  Total/.test(copy.contents), copy.contents);
   assert.ok(tapeBtn(doc, copy), "the copy can be double-clicked too");
+  env.runIntervals(2);
+  assert.strictEqual(env.followTimers(), 0, "the page timer stops once the copy is placed");
+  assert.ok(!Object.keys(doc._fields).some(k => k.startsWith("ART_CAP.")), "click areas removed from every page");
   const items = JSON.parse(doc.info.ARTRegister).items;
   assert.strictEqual(items[copy.name].src.ents, "250 x 12\n100");
   assert.strictEqual(items[name].src.ents, "250 x 12");

@@ -1986,9 +1986,9 @@ var ARTool = (function () {
         }
         stashCalc(doc, d);                            // until the tape is on the page
         startCapture(doc, "tape", { text: text, src: src }, "tape",
-            "Click where the top-left corner of the tape should go.\n\n" +
+            "Click where the top-left corner of the tape should go (on any page).\n\n" +
             "Afterwards: drag the tape by its title line or edge to move it, drag a corner to resize it, " +
-            "and double-click its figures to change them.");
+            "and double-click its figures to change them or place a copy.", { allPages: true });
     }
 
     /** Fields left in a PDF saved while 0.4.0's on-page calculator was open: tidy them away. */
